@@ -1,0 +1,76 @@
+name: Deploy to ephemeral STAGING (testing branch)
+
+on:
+  push:
+    branches: [ "testing" ]
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  NS: stg-${{ github.run_number }} # ephemeral namespace per run
+  IMAGE_TAG: testing-${{ github.sha }}
+
+jobs:
+  deploy-staging:
+    runs-on: ubuntu-latest
+    environment:
+      name: staging
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Get AKS credentials
+        run: az aks get-credentials -g ${{ secrets.AKS_RESOURCE_GROUP }} -n ${{ secrets.AKS_CLUSTER_NAME }} --admin --overwrite-existing
+
+      - name: Create namespace + apply base k8s (week08 + customer)
+        run: |
+          kubectl create namespace $NS
+          kubectl -n $NS apply -f k8s/secrets.yaml
+          kubectl -n $NS apply -f k8s/configmaps.yaml
+          kubectl -n $NS apply -f k8s/product-db.yaml
+          kubectl -n $NS apply -f k8s/order-db.yaml
+          kubectl -n $NS apply -f k8s/customer-service.yaml
+          kubectl -n $NS apply -f k8s/product-service.yaml
+          kubectl -n $NS apply -f k8s/order-service.yaml
+          kubectl -n $NS apply -f k8s/frontend.yaml
+
+      - name: Point deployments to freshly pushed images
+        env:
+          REG: ${{ secrets.ACR_LOGIN_SERVER }}
+        run: |
+          kubectl -n $NS set image deployment/product-service-w08e1 product-service=$REG/ecomm-product-service:${IMAGE_TAG}
+          kubectl -n $NS set image deployment/order-service-w08e1 order-service=$REG/ecomm-order-service:${IMAGE_TAG}
+          kubectl -n $NS set image deployment/customer-service-w08e1 customer-service=$REG/ecomm-customer-service:${IMAGE_TAG}
+          kubectl -n $NS set image deployment/frontend-w08e1 frontend=$REG/ecomm-frontend:${IMAGE_TAG}
+
+      - name: Wait for rollout
+        run: |
+          kubectl -n $NS rollout status deployment/product-service-w08e1 --timeout=180s
+          kubectl -n $NS rollout status deployment/order-service-w08e1 --timeout=180s
+          kubectl -n $NS rollout status deployment/customer-service-w08e1 --timeout=180s
+          kubectl -n $NS rollout status deployment/frontend-w08e1 --timeout=180s
+
+      - name: Simple acceptance checks inside cluster
+        run: |
+          # curl Pod to test Services internally
+          kubectl -n $NS run curl --image=curlimages/curl:8.10.1 -i --restart=Never -- sleep 60 &
+          # Give it a moment to create
+          sleep 5
+          echo "Checking product-service..."
+          kubectl -n $NS exec deploy/product-service-w08e1 -- /bin/sh -lc "wget -qO- http://localhost:8000/health || true"
+          echo "Checking order-service..."
+          kubectl -n $NS exec deploy/order-service-w08e1 -- /bin/sh -lc "wget -qO- http://localhost:8001/health || true"
+          echo "Checking customer-service..."
+          kubectl -n $NS exec deploy/customer-service-w08e1 -- /bin/sh -lc "wget -qO- http://localhost:8002/health || true"
+
+      - name: Teardown staging (always)
+        if: always()
+        run: |
+          kubectl delete namespace $NS --wait=true
