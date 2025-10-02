@@ -1,3 +1,19 @@
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: order-service-w08e1
+  labels:
+    app: order-service
+spec:
+  type: ClusterIP
+  selector:
+    app: order-service
+  ports:
+    - name: http
+      port: 8001
+      targetPort: http
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -18,7 +34,31 @@ spec:
         - name: order-service
           image: REPLACE_REG/ecomm-order-service:REPLACE_TAG
           ports:
-            - containerPort: 8001
+            - name: http
+              containerPort: 8001
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            timeoutSeconds: 1
+            failureThreshold: 6
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            timeoutSeconds: 1
+            failureThreshold: 12
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 300m
+              memory: 512Mi
           env:
             - name: POSTGRES_HOST
               value: order-db-service-w08e1
@@ -39,6 +79,7 @@ spec:
                 secretKeyRef:
                   name: ecomm-secrets-w08e1
                   key: POSTGRES_PASSWORD
+
             - name: PRODUCT_SERVICE_URL
               valueFrom:
                 configMapKeyRef:
@@ -49,6 +90,7 @@ spec:
                 configMapKeyRef:
                   name: ecomm-config-w08e1
                   key: CUSTOMER_SERVICE_URL
+
             - name: RABBITMQ_HOST
               value: rabbitmq
             - name: RABBITMQ_PORT
@@ -63,34 +105,3 @@ spec:
                 secretKeyRef:
                   name: ecomm-secrets-w08e1
                   key: RABBITMQ_PASSWORD
-          readinessProbe:
-            httpGet:
-              path: /health
-              port: 8001
-            initialDelaySeconds: 10
-            periodSeconds: 5
-            timeoutSeconds: 1
-            failureThreshold: 12
-          livenessProbe:
-            httpGet:
-              path: /health
-              port: 8001
-            initialDelaySeconds: 20
-            periodSeconds: 10
-            timeoutSeconds: 1
-            failureThreshold: 6
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: order-service-w08e1
-  labels:
-    app: order-service
-spec:
-  type: LoadBalancer
-  selector:
-    app: order-service
-  ports:
-    - name: http
-      port: 8001
-      targetPort: 8001
