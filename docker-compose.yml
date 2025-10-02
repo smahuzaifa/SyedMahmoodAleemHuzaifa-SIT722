@@ -1,0 +1,106 @@
+version: "3.9"
+
+services:
+  # --- Databases (one per service for simplicity) ---
+  product-db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: products
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5433:5432"     # host:container (optional expose for local psql)
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  order-db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: orders
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5434:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  customer-db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: customers
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5435:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  # --- Backend services (built from their Dockerfiles) ---
+  product-service:
+    build:
+      context: ./backend/product_service
+      dockerfile: Dockerfile
+    environment:
+      POSTGRES_HOST: product-db
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: products
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    depends_on:
+      product-db:
+        condition: service_healthy
+    ports:
+      - "8000:8000"     # Product API on http://localhost:8000
+
+  order-service:
+    build:
+      context: ./backend/order_service
+      dockerfile: Dockerfile
+    environment:
+      POSTGRES_HOST: order-db
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: orders
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    depends_on:
+      order-db:
+        condition: service_healthy
+    ports:
+      - "8001:8001"     # Order API on http://localhost:8001
+
+  customer-service:
+    build:
+      context: ./backend/customer_service
+      dockerfile: Dockerfile
+    environment:
+      POSTGRES_HOST: customer-db
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: customers
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    depends_on:
+      customer-db:
+        condition: service_healthy
+    ports:
+      - "8002:8002"     # Customer API on http://localhost:8002
+
+  # --- Frontend (served by nginx) ---
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    depends_on:
+      - product-service
+      - order-service
+      - customer-service
+    ports:
+      - "8080:80"       # Frontend on http://localhost:8080
