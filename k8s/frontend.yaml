@@ -1,18 +1,25 @@
-apiVersion: apps/v1
-kind: Deployment
+---
+apiVersion: v1
+kind: Service
 metadata:
   name: frontend
   labels:
     app: frontend
 spec:
+  type: ClusterIP
+  selector:
+    app: frontend
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend
+spec:
   replicas: 1
-  revisionHistoryLimit: 1
-  strategy:
-    type: RollingUpdate
-    rollingUpdate:
-      maxUnavailable: 0
-      maxSurge: 1
-  progressDeadlineSeconds: 600        # was default (600) or lower; give it more time
   selector:
     matchLabels:
       app: frontend
@@ -23,31 +30,8 @@ spec:
     spec:
       containers:
         - name: frontend
-          image: $REG/ecomm-frontend:$IMAGE_TAG
-          imagePullPolicy: IfNotPresent
-          # If your app listens on 3000, change *both* containerPort and probe ports/paths to 3000.
+          image: REPLACE_REG/ecomm-frontend:REPLACE_TAG
           ports:
-            - containerPort: 80
-          resources:
-            requests:
-              cpu: 30m
-              memory: 64Mi
-            limits:
-              cpu: 200m
-              memory: 256Mi
-          readinessProbe:
-            httpGet:
-              path: /
-              port: 80
-            initialDelaySeconds: 15
-            periodSeconds: 5
-            timeoutSeconds: 3
-            failureThreshold: 12
+            - name: http
+              containerPort: 80
           livenessProbe:
-            httpGet:
-              path: /
-              port: 80
-            initialDelaySeconds: 30
-            periodSeconds: 10
-            timeoutSeconds: 3
-            failureThreshold: 6
