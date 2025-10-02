@@ -1,54 +1,55 @@
-# week08/k8s/product-db.yaml
-
+apiVersion: v1
+kind: Service
+metadata:
+  name: product-db-service-w08e1
+spec:
+  selector: { app: product-db }
+  ports:
+    - name: pg
+      port: 5432
+      targetPort: 5432
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: product-db-deployment-w08e1
-  labels:
-    app: product-db
 spec:
   replicas: 1
+  revisionHistoryLimit: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: { maxUnavailable: 1, maxSurge: 0 }
   selector:
-    matchLabels:
-      app: product-db
+    matchLabels: { app: product-db }
   template:
     metadata:
-      labels:
-        app: product-db
+      labels: { app: product-db }
     spec:
+      terminationGracePeriodSeconds: 10
       containers:
-      - name: postgres
-        image: postgres:15-alpine # Use the same PostgreSQL image as in Docker Compose
-        ports:
-        - containerPort: 5432 # Default PostgreSQL port
-        env:
-        - name: POSTGRES_DB
-          valueFrom:
-            configMapKeyRef:
-              name: ecomm-config-w08e1 # ConfigMap name matches
-              key: PRODUCTS_DB_NAME
-        - name: POSTGRES_USER
-          valueFrom:
-            secretKeyRef:
-              name: ecomm-secrets-w08e1 # Secret name matches
-              key: POSTGRES_USER
-        - name: POSTGRES_PASSWORD
-          valueFrom:
-            secretKeyRef:
-              name: ecomm-secrets-w08e1 # Secret name matches
-              key: POSTGRES_PASSWORD
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: product-db-service-w08e1 # Internal DNS name for the Product DB
-  labels:
-    app: product-db
-spec:
-  selector:
-    app: product-db # Selects pods with the label app: product-db
-  ports:
-    - protocol: TCP
-      port: 5432 # The port the service listens on (default PostgreSQL)
-      targetPort: 5432 # The port on the Pod (containerPort)
-  type: ClusterIP # Only accessible from within the cluster
+        - name: postgres
+          image: postgres:15-alpine
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: POSTGRES_DB
+              valueFrom: { configMapKeyRef: { name: ecomm-config-w08e1, key: PRODUCTS_DB_NAME } }
+            - name: POSTGRES_USER
+              valueFrom: { secretKeyRef: { name: ecomm-secrets-w08e1, key: POSTGRES_USER } }
+            - name: POSTGRES_PASSWORD
+              valueFrom: { secretKeyRef: { name: ecomm-secrets-w08e1, key: POSTGRES_PASSWORD } }
+          ports: [{ containerPort: 5432 }]
+          readinessProbe:
+            exec: { command: ["sh","-c","pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"] }
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 6
+          livenessProbe:
+            exec: { command: ["sh","-c","pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"] }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 6
+          resources:
+            requests: { cpu: "50m", memory: "128Mi" }
+            limits:   { cpu: "250m", memory: "512Mi" }

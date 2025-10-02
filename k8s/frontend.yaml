@@ -1,5 +1,3 @@
-# week08/k8s/frontend.yaml
-
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -8,6 +6,13 @@ metadata:
     app: frontend
 spec:
   replicas: 1
+  revisionHistoryLimit: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  progressDeadlineSeconds: 600        # was default (600) or lower; give it more time
   selector:
     matchLabels:
       app: frontend
@@ -17,23 +22,32 @@ spec:
         app: frontend
     spec:
       containers:
-      - name: frontend-container
-        image: smahweek10.azurecr.io/frontend:latest
-        imagePullPolicy: Always
-        ports:
-        - containerPort: 80
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: frontend-w08e1 # Service name matches
-  labels:
-    app: frontend
-spec:
-  selector:
-    app: frontend
-  ports:
-    - protocol: TCP
-      port: 80 # The port the service listens on inside the cluster
-      targetPort: 80 # The port on the Pod (containerPort where Nginx runs)
-  type: LoadBalancer # Exposes the service on a port on each Node's IP
+        - name: frontend
+          image: $REG/ecomm-frontend:$IMAGE_TAG
+          imagePullPolicy: IfNotPresent
+          # If your app listens on 3000, change *both* containerPort and probe ports/paths to 3000.
+          ports:
+            - containerPort: 80
+          resources:
+            requests:
+              cpu: 30m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 15
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 12
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 6
