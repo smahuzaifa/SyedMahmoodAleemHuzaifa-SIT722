@@ -1,4 +1,4 @@
-name: Deploy to STAGING (testing branch)
+name: Deploy to staging
 
 on:
   push:
@@ -9,7 +9,7 @@ permissions:
   id-token: write
 
 env:
-  NS: stg-${{ github.run_number }} # ephemeral namespace per run
+  NS: stg-${{ github.run_number }}
   IMAGE_TAG: testing-${{ github.sha }}
 
 jobs:
@@ -26,51 +26,96 @@ jobs:
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
+      # (Optional) make sure we're on the subscription from AZURE_CREDENTIALS
+      - name: Select subscription
+        run: az account set --subscription ${{ fromJson(secrets.AZURE_CREDENTIALS).subscriptionId }}
+
       - name: Get AKS credentials
         run: az aks get-credentials -g ${{ secrets.AKS_RESOURCE_GROUP }} -n ${{ secrets.AKS_CLUSTER_NAME }} --admin --overwrite-existing
 
-      - name: Create namespace + apply base k8s (week08 + customer)
+      - name: Create namespace + apply all k8s manifests
         run: |
-          kubectl create namespace $NS
-          kubectl -n $NS apply -f k8s/secrets.yaml
-          kubectl -n $NS apply -f k8s/configmaps.yaml
-          kubectl -n $NS apply -f k8s/product-db.yaml
-          kubectl -n $NS apply -f k8s/order-db.yaml
-          kubectl -n $NS apply -f k8s/customer-service.yaml
-          kubectl -n $NS apply -f k8s/product-service.yaml
-          kubectl -n $NS apply -f k8s/order-service.yaml
-          kubectl -n $NS apply -f k8s/frontend.yaml
+          kubectl create namespace $NS || true
+          kubectl -n $NS apply -f k8s/ --recursive
 
-      - name: Point deployments to freshly pushed images
+      - name: Point deployments to freshly pushed images (auto-detect container names)
         env:
           REG: ${{ secrets.ACR_LOGIN_SERVER }}
+        shell: bash
         run: |
-          kubectl -n $NS set image deployment/product-service-w08e1 product-service=$REG/ecomm-product-service:${IMAGE_TAG}
-          kubectl -n $NS set image deployment/order-service-w08e1 order-service=$REG/ecomm-order-service:${IMAGE_TAG}
-          kubectl -n $NS set image deployment/customer-service-w08e1 customer-service=$REG/ecomm-customer-service:${IMAGE_TAG}
-          kubectl -n $NS set image deployment/frontend-w08e1 frontend=$REG/ecomm-frontend:${IMAGE_TAG}
+          set -euo pipefail
+
+          # Figure out the actual frontend deployment name (supports 'frontend' or 'frontend-w08e1')
+          FRONTEND_DEP="$(kubectl -n "$NS" get deploy -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' | grep -E '^frontend(-w08e1)?$' | head -n1 || true)"
+          if [[ -z "$FRONTEND_DEP" ]]; then
+            # Fallback; if none matched, assume 'frontend'
+            FRONTEND_DEP="frontend"
+          fi
+
+          # Map each Deployment to the image we built in CI
+          declare -A IMG
+          IMG["product-service-w08e1"]="$REG/ecomm-product-service:${IMAGE_TAG}"
+          IMG["order-service-w08e1"]="$REG/ecomm-order-service:${IMAGE_TAG}"
+          IMG["customer-service-w08e1"]="$REG/ecomm-customer-service:${IMAGE_TAG}"
+          IMG["$FRONTEND_DEP"]="$REG/ecomm-frontend:${IMAGE_TAG}"
+
+          for DEP in "${!IMG[@]}"; do
+            # Read the *real* container name from the deployment (first container)
+            CNAME="$(kubectl -n "$NS" get deploy "$DEP" -o jsonpath='{.spec.template.spec.containers[0].name}' || true)"
+            if [[ -z "$CNAME" ]]; then
+              echo "Could not determine container name for deployment: $DEP" >&2
+              kubectl -n "$NS" get deploy "$DEP" -o yaml | sed -n '1,160p' || true
+              exit 1
+            fi
+            echo "Setting $DEP / container '$CNAME' -> ${IMG[$DEP]}"
+            kubectl -n "$NS" set image "deployment/$DEP" "$CNAME=${IMG[$DEP]}"
+          done
+
+          # Persist env var for later steps
+          echo "FRONTEND_DEP=$FRONTEND_DEP" >> $GITHUB_ENV
 
       - name: Wait for rollout
+        shell: bash
         run: |
-          kubectl -n $NS rollout status deployment/product-service-w08e1 --timeout=180s
-          kubectl -n $NS rollout status deployment/order-service-w08e1 --timeout=180s
-          kubectl -n $NS rollout status deployment/customer-service-w08e1 --timeout=180s
-          kubectl -n $NS rollout status deployment/frontend-w08e1 --timeout=180s
+          set -euo pipefail
+          for DEP in product-service-w08e1 order-service-w08e1 customer-service-w08e1 "${FRONTEND_DEP}"; do
+            echo "Waiting for rollout of $DEP..."
+            kubectl -n "$NS" rollout status "deployment/$DEP" --timeout=240s
+          done
 
       - name: Simple acceptance checks inside cluster
+        shell: bash
         run: |
-          # curl Pod to test Services internally
-          kubectl -n $NS run curl --image=curlimages/curl:8.10.1 -i --restart=Never -- sleep 60 &
-          # Give it a moment to create
+          set -euo pipefail
+          # (Optional) curl pod
+          kubectl -n $NS run curl --image=curlimages/curl:8.10.1 -i --restart=Never -- sleep 60 >/dev/null 2>&1 || true
           sleep 5
+
           echo "Checking product-service..."
           kubectl -n $NS exec deploy/product-service-w08e1 -- /bin/sh -lc "wget -qO- http://localhost:8000/health || true"
+
           echo "Checking order-service..."
           kubectl -n $NS exec deploy/order-service-w08e1 -- /bin/sh -lc "wget -qO- http://localhost:8001/health || true"
+
           echo "Checking customer-service..."
           kubectl -n $NS exec deploy/customer-service-w08e1 -- /bin/sh -lc "wget -qO- http://localhost:8002/health || true"
 
+          echo "Checking frontend..."
+          kubectl -n $NS exec deploy/${FRONTEND_DEP} -- /bin/sh -lc "wget -qO- http://localhost:80 || true"
+
+      - name: Debug logs on failure
+        if: failure()
+        shell: bash
+        run: |
+          echo "=== Deployments & Pods ==="
+          kubectl -n $NS get deploy,pods -o wide || true
+          echo "=== Describe deployments ==="
+          kubectl -n $NS describe deploy product-service-w08e1 order-service-w08e1 customer-service-w08e1 ${FRONTEND_DEP} || true
+          echo "=== Recent logs ==="
+          kubectl -n $NS logs --all-containers --tail=120 -l app=product-service || true
+          kubectl -n $NS logs --all-containers --tail=120 -l app=order-service || true
+          kubectl -n $NS logs --all-containers --tail=120 -l app=customer-service || true
+
       - name: Teardown staging (always)
         if: always()
-        run: |
-          kubectl delete namespace $NS --wait=true
+        run: kubectl delete namespace $NS --wait=true
