@@ -6,16 +6,14 @@ metadata:
     app: frontend
 spec:
   replicas: 1
-  revisionHistoryLimit: 1
-  strategy:
-    type: RollingUpdate
-    rollingUpdate:
-      maxUnavailable: 0
-      maxSurge: 1
-  progressDeadlineSeconds: 600        # was default (600) or lower; give it more time
   selector:
     matchLabels:
       app: frontend
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 0
   template:
     metadata:
       labels:
@@ -23,31 +21,36 @@ spec:
     spec:
       containers:
         - name: frontend
-          image: $REG/ecomm-frontend:$IMAGE_TAG
-          imagePullPolicy: IfNotPresent
-          # If your app listens on 3000, change *both* containerPort and probe ports/paths to 3000.
+          image: REPLACE_REG/ecomm-frontend:REPLACE_TAG
           ports:
             - containerPort: 80
           resources:
-            requests:
-              cpu: 30m
-              memory: 64Mi
-            limits:
-              cpu: 200m
-              memory: 256Mi
+            requests: { cpu: "30m", memory: "64Mi" }
+            limits:   { cpu: "200m", memory: "256Mi" }
           readinessProbe:
-            httpGet:
-              path: /
-              port: 80
-            initialDelaySeconds: 15
+            httpGet: { path: "/", port: 80 }
+            initialDelaySeconds: 5
             periodSeconds: 5
-            timeoutSeconds: 3
+            timeoutSeconds: 2
             failureThreshold: 12
           livenessProbe:
-            httpGet:
-              path: /
-              port: 80
-            initialDelaySeconds: 30
+            httpGet: { path: "/", port: 80 }
+            initialDelaySeconds: 15
             periodSeconds: 10
-            timeoutSeconds: 3
+            timeoutSeconds: 2
             failureThreshold: 6
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: frontend
+  labels:
+    app: frontend
+spec:
+  type: LoadBalancer
+  selector:
+    app: frontend
+  ports:
+    - name: http
+      port: 80
+      targetPort: 80
