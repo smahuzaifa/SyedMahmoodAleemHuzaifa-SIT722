@@ -1,8 +1,7 @@
 # frontend/Dockerfile
 FROM nginx:1.27-alpine
-
-# reverse proxy rules for the APIs
+# Copy static files
+COPY index.html /usr/share/nginx/html/
+COPY main.js    /usr/share/nginx/html/
+# Replace the default site
 COPY nginx.conf /etc/nginx/conf.d/default.conf
-
-# serve the static assets
-COPY . /usr/share/nginx/html/
