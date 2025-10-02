@@ -71,11 +71,9 @@ jobs:
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      # fail-fast sanity check so you don't chase "ResourceNotFound"
       - name: Preflight – verify AKS exists
         run: |
-          set -euo pipefail
-          az aks show -g "${{ secrets.AKS_RESOURCE_GROUP }}" -n "${{ secrets.AKS_CLUSTER_NAME }}" 1>/dev/null
+          az aks show -g ${{ secrets.AKS_RESOURCE_GROUP }} -n ${{ secrets.AKS_CLUSTER_NAME }} >/dev/null
 
       - name: Get AKS credentials
         run: az aks get-credentials -g ${{ secrets.AKS_RESOURCE_GROUP }} -n ${{ secrets.AKS_CLUSTER_NAME }} --admin --overwrite-existing
@@ -84,18 +82,12 @@ jobs:
         run: |
           set -euo pipefail
           kubectl get ns $NS || kubectl create namespace $NS
-
-          # base
           kubectl -n $NS apply -f k8s/secrets.yaml
           kubectl -n $NS apply -f k8s/configmaps.yaml
-
-          # infra first (all three DBs + rabbitmq)
           kubectl -n $NS apply -f k8s/product-db.yaml
           kubectl -n $NS apply -f k8s/order-db.yaml
           kubectl -n $NS apply -f k8s/customer-db.yaml
           kubectl -n $NS apply -f k8s/rabbitmq.yaml
-
-          # services + frontend
           kubectl -n $NS apply -f k8s/product-service.yaml
           kubectl -n $NS apply -f k8s/order-service.yaml
           kubectl -n $NS apply -f k8s/customer-service.yaml
@@ -106,16 +98,42 @@ jobs:
           REG: ${{ secrets.ACR_LOGIN_SERVER }}
         run: |
           set -euo pipefail
-          kubectl -n $NS set image deployment/product-service-w08e1   product-service=$REG/ecomm-product-service:${IMAGE_TAG}
-          kubectl -n $NS set image deployment/order-service-w08e1     order-service=$REG/ecomm-order-service:${IMAGE_TAG}
-          kubectl -n $NS set image deployment/customer-service-w08e1  customer-service=$REG/ecomm-customer-service:${IMAGE_TAG}
-          # your deployment is named "frontend" (not frontend-w08e1)
-          kubectl -n $NS set image deployment/frontend                frontend=$REG/ecomm-frontend:${IMAGE_TAG}
+          kubectl -n $NS set image deployment/product-service-w08e1 product-service=$REG/ecomm-product-service:${IMAGE_TAG}
+          kubectl -n $NS set image deployment/order-service-w08e1   order-service=$REG/ecomm-order-service:${IMAGE_TAG}
+          kubectl -n $NS set image deployment/customer-service-w08e1 customer-service=$REG/ecomm-customer-service:${IMAGE_TAG}
+          kubectl -n $NS set image deployment/frontend              frontend=$REG/ecomm-frontend:${IMAGE_TAG}
 
-      - name: Wait for rollout
+      - name: Prune bogus customer-service ReplicaSets (safety)
         run: |
           set -euo pipefail
-          kubectl -n $NS rollout status deployment/product-service-w08e1  --timeout=300s
-          kubectl -n $NS rollout status deployment/order-service-w08e1    --timeout=300s
-          kubectl -n $NS rollout status deployment/customer-service-w08e1 --timeout=300s
-          kubectl -n $NS rollout status deployment/frontend               --timeout=300s
+          BAD_RS=$(kubectl -n "$NS" get rs -l app=customer-service -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.spec.template.spec.containers[0].image}{"\n"}{end}' \
+                   | awk '$2 ~ /REPLACE_REG|REPLACE_TAG/ {print $1}')
+          if [ -n "${BAD_RS:-}" ]; then
+            echo "Deleting bad ReplicaSets: $BAD_RS"
+            for rs in $BAD_RS; do kubectl -n "$NS" delete rs "$rs"; done
+          fi
+
+      - name: Wait for rollout (backend + frontend) with diagnostics
+        run: |
+          set -euo pipefail
+          wait_and_diag() {
+            local deploy="$1"
+            local ns="$2"
+            echo "Waiting for rollout of ${deploy}..."
+            if ! kubectl -n "${ns}" rollout status "deployment/${deploy}" --timeout=600s; then
+              echo "---- Diagnostics for ${deploy} ----"
+              kubectl -n "${ns}" get deploy/${deploy} -o wide || true
+              kubectl -n "${ns}" describe deploy/${deploy} || true
+              echo "ReplicaSets:"
+              kubectl -n "${ns}" get rs -l app=$(kubectl -n "${ns}" get deploy/${deploy} -o jsonpath='{.spec.selector.matchLabels.app}') -o wide || true
+              echo "Pods:"
+              kubectl -n "${ns}" get pods -l app=$(kubectl -n "${ns}" get deploy/${deploy} -o jsonpath='{.spec.selector.matchLabels.app}') -o wide || true
+              echo "Recent logs:"
+              kubectl -n "${ns}" logs deploy/${deploy} --tail=200 || true
+              exit 1
+            fi
+          }
+          wait_and_diag product-service-w08e1   "$NS"
+          wait_and_diag order-service-w08e1     "$NS"
+          wait_and_diag customer-service-w08e1  "$NS"
+          wait_and_diag frontend                "$NS"
