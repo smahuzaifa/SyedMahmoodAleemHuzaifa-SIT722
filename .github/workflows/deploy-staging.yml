@@ -1,4 +1,4 @@
-name: Deploy to ephemeral STAGING (testing branch)
+name: Deploy to STAGING (testing branch)
 
 on:
   push:
