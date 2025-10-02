@@ -29,19 +29,34 @@ jobs:
       - name: Get AKS credentials
         run: az aks get-credentials -g ${{ secrets.AKS_RESOURCE_GROUP }} -n ${{ secrets.AKS_CLUSTER_NAME }} --admin --overwrite-existing
 
+      # Apply all manifests: infra first (DBs + RabbitMQ), then services
       - name: Create namespace + apply base k8s (week08 + customer + rabbitmq)
         run: |
           set -euo pipefail
           kubectl create namespace $NS
           kubectl -n $NS apply -f k8s/secrets.yaml
           kubectl -n $NS apply -f k8s/configmaps.yaml
+
+          # Infra first
           kubectl -n $NS apply -f k8s/product-db.yaml
           kubectl -n $NS apply -f k8s/order-db.yaml
-          kubectl -n $NS apply -f k8s/customer-service.yaml
+          kubectl -n $NS apply -f k8s/customer-db.yaml
           kubectl -n $NS apply -f k8s/rabbitmq.yaml
+
+          # Then app services + frontend
           kubectl -n $NS apply -f k8s/product-service.yaml
           kubectl -n $NS apply -f k8s/order-service.yaml
+          kubectl -n $NS apply -f k8s/customer-service.yaml
           kubectl -n $NS apply -f k8s/frontend.yaml
+
+      # Ensure infra is up before rolling the apps
+      - name: Wait for infra (dbs + rabbitmq)
+        run: |
+          set -euo pipefail
+          kubectl -n $NS rollout status deployment/product-db-deployment-w08e1 --timeout=180s
+          kubectl -n $NS rollout status deployment/order-db-deployment-w08e1   --timeout=180s
+          kubectl -n $NS rollout status deployment/customer-db-w08e1           --timeout=180s
+          kubectl -n $NS rollout status deployment/rabbitmq-w08e1              --timeout=180s
 
       - name: Point deployments to freshly pushed images
         env:
@@ -63,8 +78,8 @@ jobs:
           echo "Waiting for rollout of customer-service-w08e1..."
           kubectl -n $NS rollout status deployment/customer-service-w08e1 --timeout=300s
 
-      # Frontend can be slow/finicky during rolling updates; don't fail the job if it times out.
-      - name: Wait for rollout (frontend, soft-fail)
+      # Frontend can be slow; don't fail the job on timeout but ensure at least 1 Ready replica
+      - name: Wait for rollout (frontend)
         run: |
           set +e
           echo "Waiting for rollout of frontend..."
@@ -72,13 +87,12 @@ jobs:
           R=$?
           set -e
           if [ $R -ne 0 ]; then
-            echo "Frontend rollout timed out; continuing since at least one replica is usually available during rolling updates."
+            echo "Frontend rollout timed out; continuing since a rolling update may still leave one pod available."
           fi
-          # Ensure at least one ready pod before proceeding
           READY=$(kubectl -n $NS get deploy frontend -o jsonpath='{.status.availableReplicas}')
           if [ -z "$READY" ] || [ "$READY" = "0" ]; then
             echo "No frontend replicas are available; showing diagnostics..."
-            kubectl -n $NS get pods -o wide
+            kubectl -n $NS get deploy,rs,po,svc -o wide
             kubectl -n $NS describe deploy frontend
             exit 1
           fi
