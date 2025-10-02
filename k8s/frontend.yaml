@@ -16,7 +16,7 @@ metadata:
 spec:
   replicas: 1
   revisionHistoryLimit: 1
-  progressDeadlineSeconds: 180
+  #progressDeadlineSeconds: 180
   strategy:
     type: RollingUpdate
     rollingUpdate: { maxUnavailable: 1, maxSurge: 0 }
