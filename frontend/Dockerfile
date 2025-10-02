@@ -1,11 +1,8 @@
 # frontend/Dockerfile
-FROM node:20-alpine as build
-WORKDIR /app
-COPY package*.json ./
-RUN if [ -f package-lock.json ]; then npm ci; else npm install; fi
-COPY . .
-RUN npm run build
-
 FROM nginx:1.27-alpine
+
+# reverse proxy rules for the APIs
 COPY nginx.conf /etc/nginx/conf.d/default.conf
-COPY --from=build /app/dist/ /usr/share/nginx/html/
+
+# serve the static assets
+COPY . /usr/share/nginx/html/
