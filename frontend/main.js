@@ -1,276 +1,161 @@
-(() => {
-  // ------------ Config (kept identical to your routing) -------------
-  const CUSTOMER_API = '/customers/';
-  const PRODUCT_API  = '/products/';
-  const ORDER_API    = '/orders/';
+// ---------- Small helpers ----------
+const $ = (id) => document.getElementById(id);
 
-  // ------------ DOM -------------
-  const messageBox = document.getElementById('messageBox');
+function showAlert(kind, msg) {
+  const el = $("alert");
+  el.innerHTML = `
+    <div class="alert alert-${kind} alert-dismissible fade show" role="alert">
+      ${msg}
+      <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+    </div>`;
+}
 
-  const customerForm  = document.getElementById('customerForm');
-  const customersList = document.getElementById('customersList');
+async function parseJsonOrText(resp) {
+  const text = await resp.text();
+  try { return { ok: resp.ok, json: JSON.parse(text), raw: text }; }
+  catch { return { ok: resp.ok, json: null, raw: text }; }
+}
 
-  const productForm   = document.getElementById('productForm');
-  const productsList  = document.getElementById('productsList');
+function asList(data) {
+  if (Array.isArray(data)) return data;
+  if (data && Array.isArray(data.items)) return data.items;
+  return [];
+}
 
-  const orderForm     = document.getElementById('orderForm');
-  const cartList      = document.getElementById('cartList');
-  const orderCustomerId = document.getElementById('orderCustomerId');
-  const orderAddress    = document.getElementById('orderAddress');
+// ---------- API base (always /api/* so NGINX proxies it) ----------
+const API = {
+  customers: "/api/customers/",
+  products : "/api/products/",
+  orders   : "/api/orders/"
+};
 
-  // ------------ Utilities -------------
-  function showMessage(msg, type = 'info') {
-    messageBox.textContent = msg;
-    messageBox.className = `message-box ${type}`;
-    messageBox.style.display = 'block';
-    setTimeout(() => { messageBox.style.display = 'none'; }, 5000);
+// ---------- Customers ----------
+async function loadCustomers() {
+  $("customersList").textContent = "Loading customers…";
+  try {
+    const r = await fetch(API.customers);
+    const p = await parseJsonOrText(r);
+    if (!p.ok) throw new Error(p.raw || "Failed to load customers");
+    const items = asList(p.json);
+    $("customersList").innerHTML =
+      items.length
+        ? items.map(c => `#${c.id ?? "?"} — ${c.email ?? ""} (${c.first_name ?? ""} ${c.last_name ?? ""})`).join("<br>")
+        : "No customers yet.";
+  } catch (e) {
+    $("customersList").textContent = "Could not load customers. Please check the Customer Service.";
+    showAlert("danger", `Failed to load customers: ${e.message}`);
   }
+}
 
-  async function safeJson(resp) {
-    // Be defensive: try JSON; fallback to text (helpful for HTML error pages)
-    const contentType = resp.headers.get('content-type') || '';
-    if (contentType.includes('application/json')) {
-      return await resp.json();
-    }
-    const text = await resp.text();
-    try { return JSON.parse(text); } catch { return { _raw: text }; }
+async function addCustomer() {
+  const body = {
+    email:       $("custEmail").value.trim(),
+    password:    $("custPassword").value,
+    first_name:  $("custFirstName").value.trim(),
+    last_name:   $("custLastName").value.trim(),
+    phone:       $("custPhone").value.trim(),
+    address:     $("custAddress").value.trim()
+  };
+  try {
+    const r = await fetch(API.customers, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    });
+    const p = await parseJsonOrText(r);
+    if (!p.ok) throw new Error(p.raw || "Unknown error");
+    showAlert("success", "Customer added successfully.");
+    await loadCustomers();
+  } catch (e) {
+    showAlert("danger", `Failed to add customer: ${e.message}`);
   }
+}
 
-  function ensureArray(val) {
-    return Array.isArray(val) ? val : [];
+// ---------- Products ----------
+async function loadProducts() {
+  $("productsList").textContent = "Loading products…";
+  try {
+    const r = await fetch(API.products);
+    const p = await parseJsonOrText(r);
+    if (!p.ok) throw new Error(p.raw || "Failed to load products");
+    const items = asList(p.json);
+    $("productsList").innerHTML =
+      items.length
+        ? items.map(pr => `#${pr.id ?? "?"} — ${pr.name ?? ""} ($${Number(pr.price ?? 0).toFixed(2)}) x ${pr.stock ?? 0}`).join("<br>")
+        : "No products yet.";
+  } catch (e) {
+    $("productsList").textContent = "Could not load products. Please check the Product Service.";
+    showAlert("danger", `Failed to load products: ${e.message}`);
   }
+}
 
-  const fmt = n => `$${Number(n).toFixed(2)}`;
-
-  // ------------ Cart -------------
-  let cart = []; // {product_id, name, price, qty}
-
-  function renderCart() {
-    if (!cart.length) {
-      cartList.innerHTML = '<div class="muted">Your cart is empty.</div>';
-      return;
-    }
-    cartList.innerHTML = cart.map(item => `
-      <div class="list-item">
-        <div>${item.name} &times; ${item.qty} <span class="muted">(${fmt(item.price)} each)</span></div>
-        <button data-id="${item.product_id}" class="remove-cart primary" style="background:#6b7280">Remove</button>
-      </div>
-    `).join('');
+async function addProduct() {
+  const body = {
+    name:  $("prodName").value.trim(),
+    price: Number($("prodPrice").value),
+    stock: Number($("prodStock").value),
+    description: $("prodDesc").value.trim()
+  };
+  try {
+    const r = await fetch(API.products, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    });
+    const p = await parseJsonOrText(r);
+    if (!p.ok) throw new Error(p.raw || "Unknown error");
+    showAlert("success", "Product added successfully.");
+    await loadProducts();
+  } catch (e) {
+    showAlert("danger", `Failed to add product: ${e.message}`);
   }
+}
 
-  cartList.addEventListener('click', e => {
-    if (e.target.classList.contains('remove-cart')) {
-      const id = Number(e.target.dataset.id);
-      cart = cart.filter(x => x.product_id !== id);
-      renderCart();
-    }
-  });
-
-  // ------------ Customers -------------
-  async function loadCustomers() {
-    customersList.innerHTML = '<div class="muted">Loading customers…</div>';
-    try {
-      const resp = await fetch(CUSTOMER_API, { headers: { 'Accept': 'application/json' } });
-      if (!resp.ok) throw new Error(`GET /customers failed: ${resp.status}`);
-      const data = await safeJson(resp);
-      const list = ensureArray(data);
-      if (!list.length) {
-        customersList.innerHTML = '<div class="muted">No customers yet.</div>';
-        return;
-      }
-      customersList.innerHTML = list.map(c => `
-        <div class="list-item">
-          <div>
-            <strong>${c.first_name ?? ''} ${c.last_name ?? ''}</strong>
-            <div class="muted">ID: ${c.customer_id} • ${c.email}</div>
-          </div>
-        </div>
-      `).join('');
-    } catch (err) {
-      console.error(err);
-      customersList.innerHTML = '<div class="muted">Could not load customers. Please check the Customer Service.</div>';
-      showMessage(`Failed to load customers: ${err.message}`, 'err');
-    }
+// ---------- Orders ----------
+async function loadOrders() {
+  $("ordersList").textContent = "Loading orders…";
+  try {
+    const r = await fetch(API.orders);
+    const p = await parseJsonOrText(r);
+    if (!p.ok) throw new Error(p.raw || "Failed to load orders");
+    const items = asList(p.json);
+    $("ordersList").innerHTML =
+      items.length
+        ? items.map(o => `#${o.id ?? "?"} — customer ${o.customer_id ?? "?"} — total $${Number(o.total_amount ?? 0).toFixed(2)} — status ${o.status ?? "unknown"}`).join("<br>")
+        : "No orders yet.";
+  } catch (e) {
+    $("ordersList").textContent = "Could not load orders. Please check the Order Service.";
+    showAlert("danger", `Failed to load orders: ${e.message}`);
   }
+}
 
-  customerForm.addEventListener('submit', async e => {
-    e.preventDefault(); // stop page reload
-    const email     = document.getElementById('custEmail').value.trim();
-    const password  = document.getElementById('custPassword').value;
-    const firstName = document.getElementById('custFirstName').value.trim();
-    const lastName  = document.getElementById('custLastName').value.trim();
-    const phone     = document.getElementById('custPhone').value.trim();
-    const address   = document.getElementById('custAddress').value.trim();
-
-    if (!email || !password) {
-      showMessage('Email and password are required.', 'warn');
-      return;
-    }
-
-    try {
-      const resp = await fetch(CUSTOMER_API, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-        body: JSON.stringify({
-          email, password,
-          first_name: firstName || null,
-          last_name:  lastName  || null,
-          phone_number: phone || null,
-          shipping_address: address || null
-        })
-      });
-      const data = await safeJson(resp);
-      if (!resp.ok) throw new Error(data?.detail || data?._raw || `POST /customers failed (${resp.status})`);
-      showMessage('Customer added successfully.', 'ok');
-      customerForm.reset();
-      await loadCustomers();
-    } catch (err) {
-      console.error(err);
-      showMessage(`Failed to add customer: ${err.message}`, 'err');
-    }
-  });
-
-  // ------------ Products -------------
-  async function loadProducts() {
-    productsList.innerHTML = '<div class="muted">Loading products…</div>';
-    try {
-      const resp = await fetch(PRODUCT_API, { headers: { 'Accept': 'application/json' } });
-      if (!resp.ok) throw new Error(`GET /products failed: ${resp.status}`);
-      const data = await safeJson(resp);
-      const list = ensureArray(data);
-      if (!list.length) {
-        productsList.innerHTML = '<div class="muted">No products yet.</div>';
-        return;
-      }
-      productsList.innerHTML = list.map(p => `
-        <div class="list-item">
-          <div>
-            <strong>${p.name}</strong> <span class="muted">ID: ${p.product_id}</span><br/>
-            <span class="muted">${p.description ?? ''}</span>
-            <div class="muted">Price: ${fmt(p.price)} • Stock: ${p.stock_quantity}</div>
-          </div>
-          <div>
-            <button class="add-cart primary" data-id="${p.product_id}" data-name="${p.name}" data-price="${p.price}">Add to Cart</button>
-          </div>
-        </div>
-      `).join('');
-    } catch (err) {
-      console.error(err);
-      productsList.innerHTML = '<div class="muted">Could not load products. Please check the Product Service.</div>';
-      showMessage(`Failed to load products: ${err.message}`, 'err');
-    }
+async function placeOrder() {
+  const body = {
+    customer_id: Number($("orderCustomerId").value),
+    shipping_address: $("orderAddress").value.trim()
+  };
+  try {
+    const r = await fetch(API.orders, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    });
+    const p = await parseJsonOrText(r);
+    if (!p.ok) throw new Error(p.raw || "Unknown error");
+    showAlert("success", "Order placed. Check Products & Order Services for async flow.");
+    await loadOrders();
+  } catch (e) {
+    showAlert("danger", `Failed to place order: ${e.message}`);
   }
+}
 
-  productForm.addEventListener('submit', async e => {
-    e.preventDefault();
-    const name  = document.getElementById('prodName').value.trim();
-    const price = Number(document.getElementById('prodPrice').value);
-    const stock = Number(document.getElementById('prodStock').value);
-    const desc  = document.getElementById('prodDesc').value.trim();
+// ---------- Wire up & initial loads ----------
+window.addEventListener("DOMContentLoaded", () => {
+  $("btnAddCustomer").addEventListener("click", addCustomer);
+  $("btnAddProduct").addEventListener("click", addProduct);
+  $("btnPlaceOrder").addEventListener("click", placeOrder);
 
-    if (!name || Number.isNaN(price) || Number.isNaN(stock)) {
-      showMessage('Please fill product name, price and stock.', 'warn');
-      return;
-    }
-
-    try {
-      const resp = await fetch(PRODUCT_API, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-        body: JSON.stringify({
-          name, price, stock_quantity: stock,
-          description: desc || null
-        })
-      });
-      const data = await safeJson(resp);
-      if (!resp.ok) throw new Error(data?.detail || data?._raw || `POST /products failed (${resp.status})`);
-      showMessage('Product added successfully.', 'ok');
-      productForm.reset();
-      await loadProducts();
-    } catch (err) {
-      console.error(err);
-      showMessage(`Failed to add product: ${err.message}`, 'err');
-    }
-  });
-
-  productsList.addEventListener('click', e => {
-    if (e.target.classList.contains('add-cart')) {
-      const id = Number(e.target.dataset.id);
-      const name = e.target.dataset.name;
-      const price = Number(e.target.dataset.price);
-      const existing = cart.find(x => x.product_id === id);
-      if (existing) existing.qty += 1;
-      else cart.push({ product_id:id, name, price, qty:1 });
-      renderCart();
-      showMessage(`Added "${name}" to cart.`, 'ok');
-    }
-  });
-
-  // ------------ Orders -------------
-  async function loadOrders() {
-    const ordersList = document.getElementById('ordersList');
-    ordersList.innerHTML = '<div class="muted">Loading orders…</div>';
-    try {
-      const resp = await fetch(ORDER_API, { headers: { 'Accept': 'application/json' } });
-      if (!resp.ok) throw new Error(`GET /orders failed: ${resp.status}`);
-      const data = await safeJson(resp);
-      const list = ensureArray(data);
-      if (!list.length) {
-        ordersList.innerHTML = '<div class="muted">No orders yet.</div>';
-        return;
-      }
-      ordersList.innerHTML = list.map(o => `
-        <div class="list-item">
-          <div>
-            <strong>Order #${o.order_id}</strong> — <span class="muted">Customer ${o.customer_id}</span><br/>
-            <span class="muted">Total: ${fmt(o.total_price)} • ${new Date(o.created_at).toLocaleString()}</span>
-          </div>
-        </div>
-      `).join('');
-    } catch (err) {
-      console.error(err);
-      document.getElementById('ordersList').innerHTML =
-        '<div class="muted">Could not load orders. Please check the Order Service.</div>';
-      showMessage(`Failed to load orders: ${err.message}`, 'err');
-    }
-  }
-
-  orderForm.addEventListener('submit', async e => {
-    e.preventDefault();
-    if (!cart.length) {
-      showMessage('Your cart is empty.', 'warn');
-      return;
-    }
-    const customer_id = Number(orderCustomerId.value);
-    const shipping_address = orderAddress.value.trim();
-    if (!customer_id || !shipping_address) {
-      showMessage('Customer ID and shipping address are required.', 'warn');
-      return;
-    }
-
-    // Convert to {product_id, quantity}
-    const items = cart.map(x => ({ product_id: x.product_id, quantity: x.qty }));
-
-    try {
-      const resp = await fetch(ORDER_API, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-        body: JSON.stringify({ customer_id, shipping_address, items })
-      });
-      const data = await safeJson(resp);
-      if (!resp.ok) throw new Error(data?.detail || data?._raw || `POST /orders failed (${resp.status})`);
-      cart = [];
-      renderCart();
-      showMessage(`Order #${data?.order_id ?? ''} placed successfully.`, 'ok');
-      await loadOrders();
-    } catch (err) {
-      console.error(err);
-      showMessage(`Failed to place order: ${err.message}`, 'err');
-    }
-  });
-
-  // ------------ Initial loads -------------
-  (async () => {
-    await Promise.all([loadCustomers(), loadProducts(), loadOrders()]);
-  })();
-})();
+  loadCustomers();
+  loadProducts();
+  loadOrders();
+});
