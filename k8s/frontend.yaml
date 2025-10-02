@@ -1,28 +1,40 @@
-# week08/k8s/frontend.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: frontend
+spec:
+  selector: { app: frontend }
+  ports:
+    - port: 80
+      targetPort: 80
+      name: http
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: frontend
-  labels:
-    app: frontend
 spec:
   replicas: 1
+  revisionHistoryLimit: 1
+  progressDeadlineSeconds: 180
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: { maxUnavailable: 1, maxSurge: 0 }
   selector:
-    matchLabels:
-      app: frontend
+    matchLabels: { app: frontend }
   template:
     metadata:
-      labels:
-        app: frontend
+      labels: { app: frontend }
     spec:
+      terminationGracePeriodSeconds: 10
       containers:
         - name: frontend
-          image: nginx:1.25 # replaced by workflow with your image
-          ports:
-            - containerPort: 80
+          image: REPLACE_REG/ecomm-frontend:REPLACE_TAG
+          imagePullPolicy: Always
+          ports: [{ containerPort: 80 }]
           readinessProbe:
             httpGet: { path: /, port: 80 }
-            initialDelaySeconds: 10
+            initialDelaySeconds: 5
             periodSeconds: 5
             timeoutSeconds: 2
             failureThreshold: 12
@@ -32,18 +44,6 @@ spec:
             periodSeconds: 10
             timeoutSeconds: 2
             failureThreshold: 6
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: frontend-w08e1
-  labels:
-    app: frontend
-spec:
-  selector:
-    app: frontend
-  ports:
-    - protocol: TCP
-      port: 80
-      targetPort: 80
-  type: LoadBalancer
+          resources:
+            requests: { cpu: "30m", memory: "64Mi" }
+            limits:   { cpu: "200m", memory: "256Mi" }

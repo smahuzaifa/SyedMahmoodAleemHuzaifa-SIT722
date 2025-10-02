@@ -1,97 +1,72 @@
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: order-service-w08e1
-  labels:
-    app: order-service
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: order-service
-  template:
-    metadata:
-      labels:
-        app: order-service
-    spec:
-      containers:
-        - name: order-service
-          # Image overwritten by workflow
-          image: nginx:1.25
-          imagePullPolicy: IfNotPresent
-          env:
-            - name: POSTGRES_HOST
-              value: "order-db-service-w08e1"
-            - name: POSTGRES_PORT
-              value: "5432"
-            - name: POSTGRES_DB
-              valueFrom:
-                configMapKeyRef:
-                  name: ecomm-config-w08e1
-                  key: ORDERS_DB_NAME
-            - name: POSTGRES_USER
-              valueFrom:
-                secretKeyRef:
-                  name: ecomm-secrets-w08e1
-                  key: POSTGRES_USER
-            - name: POSTGRES_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: ecomm-secrets-w08e1
-                  key: POSTGRES_PASSWORD
-            - name: PRODUCT_SERVICE_URL
-              valueFrom:
-                configMapKeyRef:
-                  name: ecomm-config-w08e1
-                  key: PRODUCT_SERVICE_URL
-            - name: CUSTOMER_SERVICE_URL
-              valueFrom:
-                configMapKeyRef:
-                  name: ecomm-config-w08e1
-                  key: CUSTOMER_SERVICE_URL
-
-            # NEW: RabbitMQ
-            - name: RABBITMQ_HOST
-              value: "rabbitmq"
-            - name: RABBITMQ_PORT
-              value: "5672"
-            - name: RABBITMQ_USER
-              valueFrom:
-                secretKeyRef:
-                  name: ecomm-secrets-w08e1
-                  key: RABBITMQ_USER
-            - name: RABBITMQ_PASS
-              valueFrom:
-                secretKeyRef:
-                  name: ecomm-secrets-w08e1
-                  key: RABBITMQ_PASSWORD
-
-          ports:
-            - containerPort: 8001
-          readinessProbe:
-            httpGet:
-              path: /health
-              port: 8001
-            initialDelaySeconds: 20
-            periodSeconds: 5
-            failureThreshold: 12
-          livenessProbe:
-            httpGet:
-              path: /health
-              port: 8001
-            initialDelaySeconds: 30
-            periodSeconds: 10
-            failureThreshold: 6
----
 apiVersion: v1
 kind: Service
 metadata:
   name: order-service-w08e1
 spec:
-  selector:
-    app: order-service
+  selector: { app: order-service }
   ports:
     - port: 8001
       targetPort: 8001
-      protocol: TCP
-  type: ClusterIP
+      name: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: order-service-w08e1
+spec:
+  replicas: 1
+  revisionHistoryLimit: 1
+  progressDeadlineSeconds: 180
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: { maxUnavailable: 1, maxSurge: 0 }
+  selector:
+    matchLabels: { app: order-service }
+  template:
+    metadata:
+      labels: { app: order-service }
+    spec:
+      terminationGracePeriodSeconds: 10
+      containers:
+        - name: order-service
+          image: REPLACE_REG/ecomm-order-service:REPLACE_TAG
+          imagePullPolicy: Always
+          env:
+            - name: POSTGRES_HOST
+              value: order-db-service-w08e1
+            - name: POSTGRES_PORT
+              value: "5432"
+            - name: POSTGRES_DB
+              valueFrom: { configMapKeyRef: { name: ecomm-config-w08e1, key: ORDERS_DB_NAME } }
+            - name: POSTGRES_USER
+              valueFrom: { secretKeyRef: { name: ecomm-secrets-w08e1, key: POSTGRES_USER } }
+            - name: POSTGRES_PASSWORD
+              valueFrom: { secretKeyRef: { name: ecomm-secrets-w08e1, key: POSTGRES_PASSWORD } }
+            - name: PRODUCT_SERVICE_URL
+              valueFrom: { configMapKeyRef: { name: ecomm-config-w08e1, key: PRODUCT_SERVICE_URL } }
+            - name: CUSTOMER_SERVICE_URL
+              valueFrom: { configMapKeyRef: { name: ecomm-config-w08e1, key: CUSTOMER_SERVICE_URL } }
+            - name: RABBITMQ_HOST
+              value: rabbitmq
+            - name: RABBITMQ_PORT
+              value: "5672"
+            - name: RABBITMQ_USER
+              valueFrom: { secretKeyRef: { name: ecomm-secrets-w08e1, key: RABBITMQ_USER } }
+            - name: RABBITMQ_PASS
+              valueFrom: { secretKeyRef: { name: ecomm-secrets-w08e1, key: RABBITMQ_PASSWORD } }
+          ports: [{ containerPort: 8001 }]
+          readinessProbe:
+            httpGet: { path: /health, port: 8001 }
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            timeoutSeconds: 1
+            failureThreshold: 12
+          livenessProbe:
+            httpGet: { path: /health, port: 8001 }
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            timeoutSeconds: 1
+            failureThreshold: 6
+          resources:
+            requests: { cpu: "50m", memory: "128Mi" }
+            limits:   { cpu: "300m", memory: "512Mi" }
