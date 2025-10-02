@@ -1,49 +1,53 @@
-apiVersion: v1
-kind: Service
-metadata:
-  name: frontend
-spec:
-  selector: { app: frontend }
-  ports:
-    - port: 80
-      targetPort: 80
-      name: http
----
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: frontend
+  labels:
+    app: frontend
 spec:
   replicas: 1
   revisionHistoryLimit: 1
-  #progressDeadlineSeconds: 180
   strategy:
     type: RollingUpdate
-    rollingUpdate: { maxUnavailable: 1, maxSurge: 0 }
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  progressDeadlineSeconds: 600        # was default (600) or lower; give it more time
   selector:
-    matchLabels: { app: frontend }
+    matchLabels:
+      app: frontend
   template:
     metadata:
-      labels: { app: frontend }
+      labels:
+        app: frontend
     spec:
-      terminationGracePeriodSeconds: 10
       containers:
         - name: frontend
-          image: REPLACE_REG/ecomm-frontend:REPLACE_TAG
-          imagePullPolicy: Always
-          ports: [{ containerPort: 80 }]
+          image: $REG/ecomm-frontend:$IMAGE_TAG
+          imagePullPolicy: IfNotPresent
+          # If your app listens on 3000, change *both* containerPort and probe ports/paths to 3000.
+          ports:
+            - containerPort: 80
+          resources:
+            requests:
+              cpu: 30m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
           readinessProbe:
-            httpGet: { path: /, port: 80 }
-            initialDelaySeconds: 5
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 15
             periodSeconds: 5
-            timeoutSeconds: 2
+            timeoutSeconds: 3
             failureThreshold: 12
           livenessProbe:
-            httpGet: { path: /, port: 80 }
-            initialDelaySeconds: 15
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 30
             periodSeconds: 10
-            timeoutSeconds: 2
+            timeoutSeconds: 3
             failureThreshold: 6
-          resources:
-            requests: { cpu: "30m", memory: "64Mi" }
-            limits:   { cpu: "200m", memory: "256Mi" }
