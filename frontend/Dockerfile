@@ -1,11 +1,11 @@
-# frontend/Dockerfile
-FROM nginx:1.27-alpine
+# week05/frontend/Dockerfile
 
-# Copy static site
-COPY index.html /usr/share/nginx/html/index.html
-COPY main.js    /usr/share/nginx/html/main.js
+FROM nginx:alpine
 
-# Nginx site config
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 
+COPY . /usr/share/nginx/html
+
 EXPOSE 80
+
+CMD ["nginx", "-g", "daemon off;"]
