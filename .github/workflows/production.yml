@@ -8,6 +8,9 @@ on:
 jobs:
   deploy-production:
     runs-on: ubuntu-latest
+    env:
+      # Change if you deploy to a different namespace
+      NAMESPACE: prod
 
     steps:
       # Checkout repo
@@ -19,6 +22,11 @@ jobs:
         uses: azure/login@v1
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      # (Optional) Ensure correct subscription if your credentials span multiple subs
+      # - name: Set subscription
+      #   if: ${{ env.AZURE_SUBSCRIPTION_ID != '' }}
+      #   run: az account set --subscription "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
 
       # Validate that required secrets exist
       - name: Validate inputs
@@ -43,20 +51,81 @@ jobs:
             --name "${{ secrets.AZURE_AKS_CLUSTER }}" \
             --overwrite-existing
 
-          # If you don’t want to use secrets, hardcode instead:
-          # az aks get-credentials \
-          #   --resource-group deakinuni \
-          #   --name smahweek10 \
-          #   --overwrite-existing
+          # If you don't want to use secrets, hardcode instead:
+          # az aks get-credentials --resource-group deakinuni --name smahweek10 --overwrite-existing
 
-      # Deploy manifests
+      # Ensure namespace exists and deploy manifests to it
       - name: Deploy manifests
         run: |
-          kubectl apply -f k8s/
+          # Create namespace if missing
+          kubectl get ns "$NAMESPACE" >/dev/null 2>&1 || kubectl create ns "$NAMESPACE"
 
-      # Wait until pods are ready
-      - name: Wait for pods
+          # Apply all manifests into the target namespace
+          # If your YAML files already specify metadata.namespace, they will use that.
+          # Otherwise, this forces them into $NAMESPACE.
+          kubectl apply -n "$NAMESPACE" -f k8s/
+
+      # Wait for workloads to become Available (deployments + statefulsets)
+      - name: Wait for rollouts
         run: |
-          # If your workloads are in 'prod' namespace, add: -n prod
-          kubectl wait --for=condition=Ready pods --all --timeout=300s
-#comment
+          set -e
+
+          echo "⏳ Waiting for Deployments to become Available..."
+          DEPLOYS=$(kubectl -n "$NAMESPACE" get deploy -o name || true)
+          if [ -n "$DEPLOYS" ]; then
+            for d in $DEPLOYS; do
+              echo "  -> $d"
+              kubectl -n "$NAMESPACE" rollout status "$d" --timeout=300s
+            done
+          else
+            echo "No Deployments found in $NAMESPACE"
+          fi
+
+          echo "⏳ Waiting for StatefulSets to be ready (if any)..."
+          SFS=$(kubectl -n "$NAMESPACE" get statefulset -o name || true)
+          if [ -n "$SFS" ]; then
+            for s in $SFS; do
+              echo "  -> $s"
+              # Wait for all replicas to be Ready
+              NAME=$(echo "$s" | cut -d'/' -f2)
+              REPL=$(kubectl -n "$NAMESPACE" get "$s" -o jsonpath='{.spec.replicas}')
+              kubectl -n "$NAMESPACE" rollout status "$s" --timeout=300s || true
+              # Fallback readiness check
+              kubectl -n "$NAMESPACE" wait --for=condition=Ready pod -l statefulset.kubernetes.io/pod-name -l app="$NAME" --timeout=300s || true
+            done
+          else
+            echo "No StatefulSets found in $NAMESPACE"
+          fi
+
+          echo "✅ Rollouts completed."
+
+      # Diagnostics on failure (and always print basic info)
+      - name: Diagnostics (pods, events, logs)
+        if: failure() || always()
+        run: |
+          echo "=== Pods (wide) in $NAMESPACE ==="
+          kubectl -n "$NAMESPACE" get pods -o wide || true
+
+          echo "=== Services in $NAMESPACE ==="
+          kubectl -n "$NAMESPACE" get svc || true
+
+          echo "=== Recent events (by time) in $NAMESPACE ==="
+          kubectl -n "$NAMESPACE" get events --sort-by=.lastTimestamp | tail -n 200 || true
+
+          echo "=== Describe non-ready / failing pods ==="
+          # Print describe for pods not Running/Ready
+          for p in $(kubectl -n "$NAMESPACE" get pods --no-headers 2>/dev/null | awk '$3!="Running" || $2 !~ /^[0-9]+\/\1$/{print $1}'); do
+            echo "--- DESCRIBE $p ---"
+            kubectl -n "$NAMESPACE" describe pod "$p" || true
+          done
+
+          echo "=== Logs for non-ready pods (all containers) ==="
+          for p in $(kubectl -n "$NAMESPACE" get pods --no-headers 2>/dev/null | awk '$3!="Running"{print $1}'); do
+            echo "--- LOGS $p ---"
+            for c in $(kubectl -n "$NAMESPACE" get pod "$p" -o jsonpath='{.spec.containers[*].name}' 2>/dev/null); do
+              echo ">>> container: $c (recent)"
+              kubectl -n "$NAMESPACE" logs "$p" -c "$c" --tail=200 || true
+              echo ">>> container: $c (previous if crashed)"
+              kubectl -n "$NAMESPACE" logs "$p" -c "$c" --previous --tail=200 || true
+            done
+          done
