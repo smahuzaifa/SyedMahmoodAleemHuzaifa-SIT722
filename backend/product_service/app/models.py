@@ -1,3 +1,5 @@
+# week05/backend/product_service/app/models.py
+
 from sqlalchemy import Column, DateTime, Integer, Numeric, String, Text
 from sqlalchemy.sql import func
 

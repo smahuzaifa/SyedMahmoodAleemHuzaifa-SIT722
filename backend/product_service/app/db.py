@@ -1,3 +1,5 @@
+# week05/backend/product-service/app/db.py
+
 import os
 
 from sqlalchemy import create_engine
