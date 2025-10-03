@@ -111,9 +111,32 @@ jobs:
       - name: Destroy staging environment
         if: always()
         run: |
-          echo "Cleaning up staging environment..."
+          set -e
+
+          echo "1) Scale deployments to 0 (faster teardown, releases endpoints)"
+          kubectl -n staging get deploy -o name \
+          | xargs -r -I{} kubectl -n staging scale {} --replicas=0 || true
+
+          echo "2) Delete Services first and wait (releases Azure LBs)"
+          kubectl -n staging get svc -o name \
+          | xargs -r -I{} kubectl -n staging delete {} --wait=true || true
+
+          echo "3) Delete everything applied from k8s/ (best-effort)"
           kubectl delete -n staging -f k8s/ --ignore-not-found=true || true
-          # Delete any leftover test pod
-          kubectl -n staging delete pod curl --ignore-not-found=true || true
-          # Finally remove the namespace to catch stragglers (PVCs, Services, etc.)
+
+          echo "4) Finally delete the namespace and wait"
           kubectl delete namespace staging --wait=true || true
+
+          echo "5) Confirm namespace removal (retry for up to ~10 minutes)"
+          for i in $(seq 1 60); do
+            if ! kubectl get ns staging >/dev/null 2>&1; then
+              echo "Namespace staging is gone."
+              exit 0
+            fi
+            echo "Waiting for namespace to terminate... ($i/60)"
+            sleep 10
+          done
+
+          echo "Namespace still present; dumping details:"
+          kubectl get ns staging -o yaml || true
+          exit 1
