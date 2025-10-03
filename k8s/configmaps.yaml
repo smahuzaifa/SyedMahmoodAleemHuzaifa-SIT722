@@ -13,4 +13,3 @@ data:
 
   PRODUCT_SERVICE_URL: http://product-service-w08e1:8000
   ORDER_SERVICE_URL: http://order-service-w08e1:8001
-  CUSTOMER_SERVICE_URL: http://customer-service-w08e1:8002

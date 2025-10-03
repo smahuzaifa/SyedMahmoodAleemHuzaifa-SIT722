@@ -1,4 +1,4 @@
-# week05/backend/order_service/app/db.py
+# week08/backend/order_service/app/db.py
 
 import os
 

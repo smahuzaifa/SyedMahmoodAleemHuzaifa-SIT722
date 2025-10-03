@@ -1,4 +1,4 @@
-# week05/frontend/Dockerfile
+# week08/frontend/Dockerfile
 
 FROM nginx:alpine
 

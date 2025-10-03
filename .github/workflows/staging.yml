@@ -1,0 +1,58 @@
+name: CD Pipeline - Deploy to Staging
+
+on:
+  push:
+    branches:
+      - staging   # Runs only when code is pushed/merged into staging
+
+jobs:
+  deploy-staging:
+    runs-on: ubuntu-latest
+
+    environment:
+      name: staging
+
+    steps:
+      # Checkout repo
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      # Login to Azure
+      - name: Azure Login
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      # Setup kubectl
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v3
+
+      # Get AKS credentials
+      - name: Get AKS credentials
+        run: |
+          az aks get-credentials \
+            --resource-group ${{ secrets.AZURE_RESOURCE_GROUP }} \
+            --name ${{ secrets.AZURE_AKS_CLUSTER }} \
+            --overwrite-existing
+
+      # Create staging namespace (if not exists)
+      - name: Create staging namespace
+        run: |
+          kubectl create namespace staging || echo "Namespace exists"
+
+      # Deploy to staging
+      - name: Deploy manifests
+        run: |
+          kubectl apply -n staging -f k8s/
+
+      # Wait until pods are ready
+      - name: Wait for pods
+        run: |
+          kubectl wait --for=condition=Ready pods --all -n staging --timeout=300s
+
+      # Smoke test frontend
+      - name: Run smoke test
+        run: |
+          kubectl run curl --rm -i --tty --image=curlimages/curl -n staging -- \
+          curl http://frontend:80/ || exit 1
+          
