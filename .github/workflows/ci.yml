@@ -1,0 +1,53 @@
+name: CI Pipeline - Test and Push to ACR
+
+on:
+  push:
+    branches:
+      - testing
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  build-test-push:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:13
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install -r backend/order_service/requirements.txt
+          pip install -r backend/product_service/requirements.txt
+          pip install pytest httpx
+
+      - name: Create test databases
+        run: |
+          PGPASSWORD=postgres psql -h localhost -U postgres -c "CREATE DATABASE orders;"
+          PGPASSWORD=postgres psql -h localhost -U postgres -c "CREATE DATABASE products;"
+
+      - name: Run tests
+        run: |
+          echo "Running pytest with explicit PYTHONPATH"
+          export PYTHONPATH=$PWD/backend/order_service:$PWD/backend/product_service
+          pytest backend/order_service/tests backend/product_service/tests --maxfail=1 --disable-warnings -q

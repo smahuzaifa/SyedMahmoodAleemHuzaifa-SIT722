@@ -1,0 +1,43 @@
+name: CD Pipeline - Deploy to Production
+
+on:
+  push:
+    branches:
+      - main   # Only trigger on production branch
+
+jobs:
+  deploy-production:
+    runs-on: ubuntu-latest
+
+    steps:
+      # Checkout repo
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      # Login to Azure
+      - name: Azure Login
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      # Setup kubectl
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v3
+
+      # Get AKS credentials
+      - name: Get AKS credentials
+        run: |
+          az aks get-credentials \
+            --resource-group ${{ secrets.AZURE_RESOURCE_GROUP }} \
+            --name ${{ secrets.AZURE_AKS_CLUSTER }} \
+            --overwrite-existing
+
+      # Deploy manifests
+      - name: Deploy manifests
+        run: |
+          kubectl apply -f k8s/
+
+      # Wait until pods are ready
+      - name: Wait for pods
+        run: |
+          kubectl wait --for=condition=Ready pods --all --timeout=300s

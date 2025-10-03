@@ -5,6 +5,5 @@ psycopg2-binary
 python-multipart
 pydantic
 azure-storage-blob
-aio-pika
 pytest
 httpx

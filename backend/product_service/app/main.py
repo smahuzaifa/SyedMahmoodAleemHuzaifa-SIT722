@@ -1,7 +1,5 @@
-# week05/backend/product_service/app/main.py
+# week08/backend/product_service/app/main.py
 
-import asyncio
-import json
 import logging
 import os
 import sys
@@ -11,8 +9,7 @@ from decimal import Decimal
 from typing import List, Optional
 from urllib.parse import urlparse
 
-import aio_pika
-
+# Azure Storage Imports
 from azure.storage.blob import (
     BlobSasPermissions,
     BlobServiceClient,
@@ -31,7 +28,7 @@ from fastapi import (
     status,
 )
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy.exc import OperationalError, IntegrityError
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from .db import Base, engine, get_db
@@ -56,8 +53,6 @@ AZURE_STORAGE_CONTAINER_NAME = os.getenv(
     "AZURE_STORAGE_CONTAINER_NAME", "product-images"
 )
 AZURE_SAS_TOKEN_EXPIRY_HOURS = int(os.getenv("AZURE_SAS_TOKEN_EXPIRY_HOURS", "24"))
-
-blob_service_client: Optional[BlobServiceClient] = None
 
 # Initialize BlobServiceClient
 if AZURE_STORAGE_ACCOUNT_NAME and AZURE_STORAGE_ACCOUNT_KEY:
@@ -93,18 +88,7 @@ else:
     blob_service_client = None
 
 
-RESTOCK_THRESHOLD = 5
-
-# --- RabbitMQ Configuration ---
-RABBITMQ_HOST = os.getenv("RABBITMQ_HOST", "localhost")
-RABBITMQ_PORT = int(os.getenv("RABBITMQ_PORT", "5672"))
-RABBITMQ_USER = os.getenv("RABBITMQ_USER", "guest")
-RABBITMQ_PASS = os.getenv("RABBITMQ_PASS", "guest")
-
-# Global RabbitMQ connection and channel objects
-rabbitmq_connection: Optional[aio_pika.Connection] = None
-rabbitmq_channel: Optional[aio_pika.Channel] = None
-rabbitmq_exchange: Optional[aio_pika.Exchange] = None
+RESTOCK_THRESHOLD = 5  # Threshold for restock notification
 
 # --- FastAPI Application Setup ---
 app = FastAPI(
@@ -121,236 +105,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
-# --- RabbitMQ Helper Functions ---
-async def connect_to_rabbitmq():
-    """Establishes an asynchronous connection to RabbitMQ."""
-    global rabbitmq_connection, rabbitmq_channel, rabbitmq_exchange
-
-    rabbitmq_url = (
-        f"amqp://{RABBITMQ_USER}:{RABBITMQ_PASS}@{RABBITMQ_HOST}:{RABBITMQ_PORT}/"
-    )
-    max_retries = 10
-    retry_delay_seconds = 5
-
-    for i in range(max_retries):
-        try:
-            logger.info(
-                f"Product Service: Attempting to connect to RabbitMQ (attempt {i+1}/{max_retries})..."
-            )
-            rabbitmq_connection = await aio_pika.connect_robust(rabbitmq_url)
-            rabbitmq_channel = await rabbitmq_connection.channel()
-            # Declare a direct exchange for events
-            rabbitmq_exchange = await rabbitmq_channel.declare_exchange(
-                "ecomm_events", aio_pika.ExchangeType.DIRECT, durable=True
-            )
-            logger.info(
-                "Product Service: Connected to RabbitMQ and declared 'ecomm_events' exchange."
-            )
-            return True
-        except Exception as e:
-            logger.warning(f"Product Service: Failed to connect to RabbitMQ: {e}")
-            if i < max_retries - 1:
-                await asyncio.sleep(retry_delay_seconds)
-            else:
-                logger.critical(
-                    f"Product Service: Failed to connect to RabbitMQ after {max_retries} attempts. RabbitMQ functionality will be limited."
-                )
-                return False
-    return False
-
-
-async def close_rabbitmq_connection():
-    """Closes the RabbitMQ connection."""
-    if rabbitmq_connection:
-        logger.info("Product Service: Closing RabbitMQ connection.")
-        await rabbitmq_connection.close()
-
-
-async def publish_event(routing_key: str, message_data: dict):
-    """Publishes a message to the RabbitMQ exchange."""
-    if not rabbitmq_exchange:
-        logger.error(
-            f"Product Service: RabbitMQ exchange not available. Cannot publish event '{routing_key}'."
-        )
-        return
-    try:
-        message_body = json.dumps(message_data).encode("utf-8")
-        message = aio_pika.Message(
-            body=message_body,
-            content_type="application/json",
-            delivery_mode=aio_pika.DeliveryMode.PERSISTENT,  # Make message persistent
-        )
-        await rabbitmq_exchange.publish(message, routing_key=routing_key)
-        logger.info(
-            f"Product Service: Published event '{routing_key}' with data: {message_data}"
-        )
-    except Exception as e:
-        logger.error(
-            f"Product Service: Failed to publish event '{routing_key}': {e}",
-            exc_info=True,
-        )
-
-
-async def consume_order_placed_events(db_session: Session):
-    """
-    Consumes messages from the 'order.placed' queue and processes stock deductions.
-    This function runs in a separate background task.
-    """
-    if not rabbitmq_channel or not rabbitmq_exchange:
-        logger.error(
-            "Product Service: RabbitMQ channel or exchange not available for consuming order events."
-        )
-        return
-
-    queue_name = "product_service_order_placed_queue"
-    order_placed_routing_key = "order.placed"
-
-    try:
-        queue = await rabbitmq_channel.declare_queue(queue_name, durable=True)
-        await queue.bind(rabbitmq_exchange, routing_key=order_placed_routing_key)
-        logger.info(
-            f"Product Service: Listening for '{order_placed_routing_key}' messages on queue '{queue_name}'."
-        )
-
-        async with queue.iterator() as queue_iter:
-            async for message in queue_iter:
-                async with message.process():
-                    try:
-                        message_data = json.loads(message.body.decode("utf-8"))
-                        logger.info(
-                            f"Product Service: Received order.placed message: {message_data}"
-                        )
-
-                        order_id = message_data.get("order_id")
-                        order_items = message_data.get("items", [])
-
-                        success = True
-                        failed_products = []
-
-                        local_db_session = Session(bind=engine)
-                        try:
-                            for item in order_items:
-                                product_id = item.get("product_id")
-                                quantity = item.get("quantity")
-                                if not product_id or not quantity:
-                                    logger.error(
-                                        f"Product Service: Invalid item data in message: {item}"
-                                    )
-                                    success = False
-                                    break
-
-                                # Deduct stock
-                                db_product = (
-                                    local_db_session.query(Product)
-                                    .filter(Product.product_id == product_id)
-                                    .first()
-                                )
-
-                                if not db_product:
-                                    logger.warning(
-                                        f"Product Service: Stock deduction failed for order {order_id}. Product {product_id} not found."
-                                    )
-                                    success = False
-                                    failed_products.append(
-                                        {
-                                            "product_id": product_id,
-                                            "reason": "product_not_found",
-                                        }
-                                    )
-                                    break  # Fail entire order deduction if a product is not found
-
-                                if db_product.stock_quantity < quantity:
-                                    logger.warning(
-                                        f"Product Service: Stock deduction failed for order {order_id}. Insufficient stock for product {product_id}. Available: {db_product.stock_quantity}, Requested: {quantity}."
-                                    )
-                                    success = False
-                                    failed_products.append(
-                                        {
-                                            "product_id": product_id,
-                                            "reason": "insufficient_stock",
-                                            "available_stock": db_product.stock_quantity,
-                                        }
-                                    )
-                                    break  # Fail entire order deduction if stock is insufficient
-
-                                db_product.stock_quantity -= quantity
-                                local_db_session.add(db_product)
-                                logger.info(
-                                    f"Product Service: Deducted {quantity} from product {product_id} for order {order_id}. New stock: {db_product.stock_quantity}."
-                                )
-
-                                # Optional: Log or trigger alert if stock falls below threshold
-                                if db_product.stock_quantity < RESTOCK_THRESHOLD:
-                                    logger.warning(
-                                        f"Product Service: ALERT! Stock for product '{db_product.name}' (ID: {db_product.product_id}) is low: {db_product.stock_quantity}."
-                                    )
-
-                            if success:
-                                local_db_session.commit()
-                                logger.info(
-                                    f"Product Service: Successfully deducted stock for all items in order {order_id}. Publishing 'product.stock.deducted' event."
-                                )
-                                await publish_event(
-                                    "product.stock.deducted",
-                                    {
-                                        "order_id": order_id,
-                                        "status": "success",
-                                        "timestamp": datetime.utcnow().isoformat(),
-                                    },
-                                )
-                            else:
-                                local_db_session.rollback()  # Rollback all changes if any item fails
-                                logger.error(
-                                    f"Product Service: Failed to deduct stock for order {order_id}. Rolling back. Publishing 'product.stock.deduction.failed' event."
-                                )
-                                await publish_event(
-                                    "product.stock.deduction.failed",
-                                    {
-                                        "order_id": order_id,
-                                        "status": "failed",
-                                        "timestamp": datetime.utcnow().isoformat(),
-                                        "details": failed_products,
-                                    },
-                                )
-                        except Exception as db_e:
-                            local_db_session.rollback()
-                            logger.critical(
-                                f"Product Service: Database error during stock deduction for order {order_id}: {db_e}",
-                                exc_info=True,
-                            )
-                            await publish_event(
-                                "product.stock.deduction.failed",
-                                {
-                                    "order_id": order_id,
-                                    "status": "failed",
-                                    "timestamp": datetime.utcnow().isoformat(),
-                                    "details": [
-                                        {
-                                            "reason": "database_error",
-                                            "message": str(db_e),
-                                        }
-                                    ],
-                                },
-                            )
-                        finally:
-                            local_db_session.close()
-
-                    except json.JSONDecodeError as e:
-                        logger.error(
-                            f"Product Service: Failed to decode RabbitMQ message body: {e}. Message: {message.body}"
-                        )
-                    except Exception as e:
-                        logger.error(
-                            f"Product Service: Unhandled error processing order.placed message: {e}",
-                            exc_info=True,
-                        )
-    except Exception as e:
-        logger.critical(
-            f"Product Service: Error in RabbitMQ consumer for order.placed events: {e}",
-            exc_info=True,
-        )
 
 
 # --- FastAPI Event Handlers ---
@@ -387,14 +141,6 @@ async def startup_event():
             )
             sys.exit(1)
 
-    # Connect to RabbitMQ and start consumer
-    if await connect_to_rabbitmq():
-        asyncio.create_task(consume_order_placed_events(next(get_db())))
-    else:
-        logger.error(
-            "Product Service: RabbitMQ connection failed at startup. Async order processing will not work."
-        )
-
 
 # --- Root Endpoint ---
 @app.get("/", status_code=status.HTTP_200_OK, summary="Root endpoint")
@@ -408,7 +154,6 @@ async def health_check():
     return {"status": "ok", "service": "product-service"}
 
 
-# --- CRUD Endpoints ---
 @app.post(
     "/products/",
     response_model=ProductResponse,
@@ -416,6 +161,9 @@ async def health_check():
     summary="Create a new product",
 )
 async def create_product(product: ProductCreate, db: Session = Depends(get_db)):
+    """
+    Creates a new product in the database.
+    """
     logger.info(f"Product Service: Creating product: {product.name}")
     try:
         db_product = Product(**product.model_dump())
@@ -426,15 +174,6 @@ async def create_product(product: ProductCreate, db: Session = Depends(get_db)):
             f"Product Service: Product '{db_product.name}' (ID: {db_product.product_id}) created successfully."
         )
         return db_product
-    except IntegrityError:
-        db.rollback()
-        logger.warning(
-            f"Product Service: Integrity error creating product: likely duplicate name or ID issue for product: {product.name}"
-        )
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Product with this name might already exist or similar data integrity issue.",
-        )
     except Exception as e:
         db.rollback()
         logger.error(f"Product Service: Error creating product: {e}", exc_info=True)
@@ -455,6 +194,9 @@ def list_products(
     limit: int = Query(100, ge=1, le=100),
     search: Optional[str] = Query(None, max_length=255),
 ):
+    """
+    Lists products with optional pagination and search by name/description.
+    """
     logger.info(
         f"Product Service: Listing products with skip={skip}, limit={limit}, search='{search}'"
     )
@@ -487,7 +229,6 @@ def get_product(product_id: int, db: Session = Depends(get_db)):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Product not found"
         )
-
     logger.info(
         f"Product Service: Retrieved product with ID {product_id}. Name: {product.name}"
     )
@@ -541,6 +282,10 @@ async def update_product(
     summary="Delete a product by ID",
 )
 def delete_product(product_id: int, db: Session = Depends(get_db)):
+    """
+    Deletes a product record from the database.
+    Does NOT delete the image from Azure Blob Storage.
+    """
     logger.info(f"Product Service: Attempting to delete product with ID: {product_id}")
     product = db.query(Product).filter(Product.product_id == product_id).first()
     if not product:
@@ -577,6 +322,11 @@ def delete_product(product_id: int, db: Session = Depends(get_db)):
 async def upload_product_image(
     product_id: int, file: UploadFile = File(...), db: Session = Depends(get_db)
 ):
+    """
+    Uploads an image file to Azure Blob Storage and updates the product's image_url in the database.
+    Generates a SAS token for the image URL with a defined expiry.
+    Only supports image file types.
+    """
     if not blob_service_client:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -618,12 +368,16 @@ async def upload_product_image(
             f"Product Service: Uploading image '{file.filename}' for product {product_id} as '{blob_name}' to Azure."
         )
 
+        # Upload the file content directly
+        # Use stream=True for large files
         blob_client.upload_blob(
             file.file,
             overwrite=True,
             content_settings=ContentSettings(content_type=file.content_type),
         )
 
+        # Generate Shared Access Signature (SAS) for public read access
+        # SAS will expire after AZURE_SAS_TOKEN_EXPIRY_HOURS
         sas_token = generate_blob_sas(
             account_name=AZURE_STORAGE_ACCOUNT_NAME,
             account_key=AZURE_STORAGE_ACCOUNT_KEY,
@@ -662,11 +416,15 @@ async def upload_product_image(
 @app.patch(
     "/products/{product_id}/deduct-stock",
     response_model=ProductResponse,
-    summary="[DEPRECATED/FALLBACK] Deduct stock quantity for a product (prefer async events)",
+    summary="Deduct stock quantity for a product",
 )
-async def deduct_product_stock_sync(
+async def deduct_product_stock(
     product_id: int, request: StockDeductRequest, db: Session = Depends(get_db)
 ):
+    """
+    Deducts a specified quantity from a product's stock.
+    Returns 404 if product not found, 400 if insufficient stock.
+    """
     logger.info(
         f"Product Service: Attempting to deduct {request.quantity_to_deduct} from stock for product ID: {product_id}"
     )
