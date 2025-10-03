@@ -1,326 +1,402 @@
-/* ---------- tiny DOM helpers ---------- */
-const $ = (sel, root = document) => root.querySelector(sel);
-const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
+// EXACT SAME UI/logic as your file; only change is how the API URLs are formed.
+// We call relative paths and let Nginx proxy to the AKS services.
 
-/* ---------- endpoints (nginx proxies these to the right services) ---------- */
-const API = {
-  customers: '/customers',
-  products:  '/products',
-  orders:    '/orders'
-};
+document.addEventListener('DOMContentLoaded', () => {
+    // Use relative paths so requests go to the same host (your LB IP)
+    // and get proxied by Nginx to the cluster services.
+    const PRODUCT_API_BASE_URL  = '';
+    const ORDER_API_BASE_URL    = '';
+    const CUSTOMER_API_BASE_URL = '';
 
-/* ---------- UI helpers ---------- */
-const banner = $('#banner'); // optional top error/success alert area
-function showBanner(msg, type = 'error') {
-  if (!banner) return;
-  banner.textContent = msg;
-  banner.className = type === 'error'
-    ? 'alert alert-danger'
-    : 'alert alert-success';
-  banner.style.display = 'block';
-  setTimeout(() => (banner.style.display = 'none'), 6000);
-}
+    const messageBox = document.getElementById('message-box');
+    const productForm = document.getElementById('product-form');
+    const productListDiv = document.getElementById('product-list');
+    const customerForm = document.getElementById('customer-form');
+    const customerListDiv = document.getElementById('customer-list');
+    const cartItemsList = document.getElementById('cart-items');
+    const cartTotalSpan = document.getElementById('cart-total');
+    const placeOrderForm = document.getElementById('place-order-form');
+    const orderListDiv = document.getElementById('order-list');
 
-/* Generic fetch helpers with nicer errors */
-async function jsonFetch(url, opts = {}) {
-  const res = await fetch(url, opts);
-  const text = await res.text();
-  let data = null;
-  try { data = text ? JSON.parse(text) : null; } catch { /* not JSON */ }
+    let cart = [];
+    let productsCache = {};
 
-  if (!res.ok) {
-    const msg = data?.detail
-      ? (Array.isArray(data.detail) ? data.detail.map(d => d.msg || d).join(', ')
-                                    : (data.detail.message || data.detail))
-      : text || `${res.status} ${res.statusText}`;
-    throw new Error(`${res.status} ${res.statusText}: ${msg}`);
-  }
-  return data;
-}
+    function showMessage(message, type = 'info') {
+        messageBox.textContent = message;
+        messageBox.className = `message-box ${type}`;
+        messageBox.style.display = 'block';
+        setTimeout(() => { messageBox.style.display = 'none'; }, 5000);
+    }
 
-function jsonPost(url, body) {
-  return jsonFetch(url, {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify(body)
-  });
-}
+    function formatCurrency(amount) {
+        return `$${parseFloat(amount).toFixed(2)}`;
+    }
 
-function jsonDelete(url) {
-  return jsonFetch(url, { method: 'DELETE' });
-}
+    // ---------- Products ----------
+    async function fetchProducts() {
+        productListDiv.innerHTML = '<p>Loading products...</p>';
+        try {
+            const res = await fetch(`/products/`);
+            if (!res.ok) {
+                let e; try { e = await res.json(); } catch {}
+                throw new Error((e && e.detail) || `HTTP ${res.status}`);
+            }
+            const products = await res.json();
+            productListDiv.innerHTML = '';
+            productsCache = {};
 
-function jsonPatch(url, body) {
-  return jsonFetch(url, {
-    method: 'PATCH',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify(body)
-  });
-}
+            if (!products.length) {
+                productListDiv.innerHTML = '<p>No products available yet. Add some above!</p>';
+                return;
+            }
 
-/* ---------- Customers ---------- */
-async function loadCustomers() {
-  const list = $('#customersList');
-  if (list) list.innerHTML = '<em>Loading customers...</em>';
-  try {
-    const customers = await jsonFetch(`${API.customers}/`);
-    if (!list) return;
-    list.innerHTML = customers.length
-      ? customers.map(renderCustomerCard).join('')
-      : '<div>No customers yet.</div>';
-  } catch (err) {
-    if (list) list.innerHTML = '<div class="text-danger">Could not load customers.</div>';
-    showBanner(`Failed to load customers: ${err.message}`);
-  }
-}
+            products.forEach(p => {
+                productsCache[p.product_id] = p;
+                const card = document.createElement('div');
+                card.className = 'product-card';
+                card.innerHTML = `
+                    <img src="${p.image_url || 'https://placehold.co/300x200/cccccc/333333?text=No+Image'}"
+                         alt="${p.name}"
+                         onerror="this.onerror=null;this.src='https://placehold.co/300x200/cccccc/333333?text=Image+Error';"/>
+                    <h3>${p.name} (ID: ${p.product_id})</h3>
+                    <p>${p.description || 'No description available.'}</p>
+                    <p class="price">${formatCurrency(p.price)}</p>
+                    <p class="stock">Stock: ${p.stock_quantity}</p>
+                    <p><small>Created: ${new Date(p.created_at).toLocaleString()}</small></p>
+                    <p><small>Last Updated: ${new Date(p.updated_at).toLocaleString()}</small></p>
+                    <div class="upload-image-group">
+                        <label for="image-upload-${p.product_id}">Upload Image:</label>
+                        <input type="file" id="image-upload-${p.product_id}" accept="image/*" data-product-id="${p.product_id}">
+                        <button class="upload-btn" data-id="${p.product_id}">Upload Photo</button>
+                    </div>
+                    <div class="card-actions">
+                        <button class="add-to-cart-btn" data-id="${p.product_id}" data-name="${p.name}" data-price="${p.price}">Add to Cart</button>
+                        <button class="delete-btn" data-id="${p.product_id}">Delete</button>
+                    </div>`;
+                productListDiv.appendChild(card);
+            });
+        } catch (err) {
+            console.error(err);
+            showMessage(`Failed to load products: ${err.message}`, 'error');
+            productListDiv.innerHTML = '<p>Could not load products. Please check the Product Service.</p>';
+        }
+    }
 
-function renderCustomerCard(c) {
-  return `
-    <div class="card mb-2">
-      <div class="card-body">
-        <div class="fw-bold">${c.first_name ?? ''} ${c.last_name ?? ''} (ID: ${c.id})</div>
-        <div class="small text-muted">${c.email ?? ''}</div>
-        <div class="small">${c.phone_number ?? ''}</div>
-        <div class="small">${c.shipping_address ?? ''}</div>
-        <button class="btn btn-sm btn-outline-danger mt-2" onclick="deleteCustomer(${c.id})">Delete</button>
-      </div>
-    </div>
-  `;
-}
+    productForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const name = document.getElementById('product-name').value;
+        const price = parseFloat(document.getElementById('product-price').value);
+        const stock_quantity = parseInt(document.getElementById('product-stock').value, 10);
+        const description = document.getElementById('product-description').value;
+        const body = { name, price, stock_quantity, description };
 
-async function addCustomer() {
-  try {
-    const body = {
-      email: $('#custEmail').value.trim(),
-      password: $('#custPassword').value,
-      first_name: $('#custFirst').value.trim(),
-      last_name: $('#custLast').value.trim(),
-      phone_number: $('#custPhone').value.trim(),
-      shipping_address: $('#custAddress').value.trim()
-    };
-    await jsonPost(`${API.customers}/`, body);
-    showBanner('Customer added', 'success');
-    clearCustomerForm();
-    loadCustomers();
-  } catch (err) {
-    showBanner(`Failed to add customer: ${err.message}`);
-  }
-}
+        try {
+            const res = await fetch(`/products/`, {
+                method: 'POST', headers: {'Content-Type':'application/json'},
+                body: JSON.stringify(body)
+            });
+            if (!res.ok) {
+                let e; try { e = await res.json(); } catch {}
+                throw new Error((e && e.detail && JSON.stringify(e.detail)) || `HTTP ${res.status}`);
+            }
+            const p = await res.json();
+            showMessage(`Product "${p.name}" added successfully! ID: ${p.product_id}`, 'success');
+            productForm.reset();
+            fetchProducts();
+        } catch (err) {
+            showMessage(`Error adding product: ${err.message}`, 'error');
+        }
+    });
 
-async function deleteCustomer(id) {
-  try {
-    await jsonDelete(`${API.customers}/${id}`);
-    showBanner('Customer deleted', 'success');
-    loadCustomers();
-  } catch (err) {
-    showBanner(`Failed to delete customer: ${err.message}`);
-  }
-}
+    productListDiv.addEventListener('click', async (e) => {
+        if (e.target.classList.contains('delete-btn')) {
+            const id = e.target.dataset.id;
+            if (!confirm(`Delete product ID: ${id}?`)) return;
+            try {
+                const res = await fetch(`/products/${id}`, { method: 'DELETE' });
+                if (res.status === 204) {
+                    showMessage(`Product ${id} deleted.`, 'success');
+                    fetchProducts();
+                } else {
+                    let dj; try { dj = await res.json(); } catch {}
+                    throw new Error((dj && dj.detail && JSON.stringify(dj.detail)) || `HTTP ${res.status}`);
+                }
+            } catch (err) {
+                showMessage(`Error deleting product: ${err.message}`, 'error');
+            }
+        }
 
-function clearCustomerForm() {
-  ['custEmail','custPassword','custFirst','custLast','custPhone','custAddress']
-    .forEach(id => { const el = $(`#${id}`); if (el) el.value=''; });
-}
+        if (e.target.classList.contains('add-to-cart-btn')) {
+            const id = e.target.dataset.id;
+            const name = e.target.dataset.name;
+            const price = parseFloat(e.target.dataset.price);
+            addToCart(id, name, price);
+        }
 
-/* ---------- Products ---------- */
-async function loadProducts() {
-  const list = $('#productsList');
-  if (list) list.innerHTML = '<em>Loading products...</em>';
-  try {
-    const products = await jsonFetch(`${API.products}/`);
-    if (!list) return;
-    list.innerHTML = products.length
-      ? products.map(renderProductCard).join('')
-      : '<div>No products yet.</div>';
-  } catch (err) {
-    if (list) list.innerHTML = '<div class="text-danger">Could not load products.</div>';
-    showBanner(`Failed to load products: ${err.message}`);
-  }
-}
+        if (e.target.classList.contains('upload-btn')) {
+            const id = e.target.dataset.id;
+            const input = document.getElementById(`image-upload-${id}`);
+            const file = input.files[0];
+            if (!file) { showMessage('Select an image first.', 'info'); return; }
+            const fd = new FormData(); fd.append('file', file);
+            try {
+                showMessage(`Uploading image for product ${id}...`, 'info');
+                const res = await fetch(`/products/${id}/upload-image`, { method: 'POST', body: fd });
+                if (!res.ok) {
+                    let dj; try { dj = await res.json(); } catch {}
+                    throw new Error((dj && dj.detail && JSON.stringify(dj.detail)) || `HTTP ${res.status}`);
+                }
+                const upd = await res.json();
+                showMessage(`Image uploaded for ${upd.name}!`, 'success');
+                input.value = '';
+                fetchProducts();
+            } catch (err) {
+                showMessage(`Error uploading image: ${err.message}`, 'error');
+            }
+        }
+    });
 
-function renderProductCard(p) {
-  const img = p.image_url ? `<img src="${p.image_url}" class="img-fluid mb-2" alt="${p.name}" />`
-                          : `<div class="no-image">No Image</div>`;
-  return `
-    <div class="card mb-3">
-      <div class="card-body">
-        <h6 class="card-title mb-1">${p.name} <span class="text-muted">(ID: ${p.id})</span></h6>
-        <div class="small text-muted mb-1">$${Number(p.price).toFixed(2)}</div>
-        <div class="small mb-1">${p.description ?? ''}</div>
-        <div class="small mb-2">Stock: ${p.stock_quantity}</div>
-        ${img}
-        <div class="d-flex gap-2 mt-2">
-          <button class="btn btn-sm btn-outline-primary" onclick="addToCart(${p.id})">Add to Cart</button>
-          <button class="btn btn-sm btn-outline-danger" onclick="deleteProduct(${p.id})">Delete</button>
-        </div>
-      </div>
-    </div>
-  `;
-}
+    function addToCart(product_id, name, price) {
+        const i = cart.findIndex(x => x.product_id === product_id);
+        if (i !== -1) cart[i].quantity += 1;
+        else cart.push({ product_id, name, price, quantity: 1 });
+        updateCartDisplay();
+        showMessage(`Added "${name}" to cart!`, 'info');
+    }
 
-/* -------------- IMPORTANT CHANGE --------------
-   We only send `stock_quantity` (never `stock`).
-   This avoids 422 when backend expects stock_quantity.
------------------------------------------------- */
-async function addProduct() {
-  const name  = $('#prodName').value.trim();
-  const price = Number($('#prodPrice').value);
-  const stock = Number($('#prodStock').value);
-  const description = $('#prodDescription').value.trim();
+    function updateCartDisplay() {
+        cartItemsList.innerHTML = '';
+        let total = 0;
+        if (!cart.length) {
+            cartItemsList.innerHTML = '<li>Your cart is empty.</li>';
+        } else {
+            cart.forEach(item => {
+                const li = document.createElement('li');
+                const itemTotal = item.quantity * item.price;
+                total += itemTotal;
+                li.innerHTML = `<span>${item.name} (x${item.quantity})</span>
+                                <span>${formatCurrency(item.price)} each - ${formatCurrency(itemTotal)}</span>`;
+                cartItemsList.appendChild(li);
+            });
+        }
+        cartTotalSpan.textContent = `Total: ${formatCurrency(total)}`;
+    }
 
-  if (!name || Number.isNaN(price) || Number.isNaN(stock)) {
-    showBanner('Please fill Name, Price and Stock.');
-    return;
-  }
+    // ---------- Customers ----------
+    async function fetchCustomers() {
+        customerListDiv.innerHTML = '<p>Loading customers...</p>';
+        try {
+            const res = await fetch(`/customers/`);
+            if (!res.ok) {
+                let e; try { e = await res.json(); } catch {}
+                throw new Error((e && e.detail) || `HTTP ${res.status}`);
+            }
+            const customers = await res.json();
+            customerListDiv.innerHTML = '';
+            if (!customers.length) {
+                customerListDiv.innerHTML = '<p>No customers available yet. Add some above!</p>';
+                return;
+            }
+            customers.forEach(c => {
+                const card = document.createElement('div');
+                card.className = 'customer-card';
+                card.innerHTML = `
+                    <h3>${c.first_name} ${c.last_name} (ID: ${c.customer_id})</h3>
+                    <p>Email: ${c.email}</p>
+                    <p>Phone: ${c.phone_number || 'N/A'}</p>
+                    <p>Shipping Address: ${c.shipping_address || 'N/A'}</p>
+                    <p><small>Created: ${new Date(c.created_at).toLocaleString()}</small></p>
+                    <div class="card-actions">
+                        <button class="delete-customer-btn" data-id="${c.customer_id}">Delete</button>
+                    </div>`;
+                customerListDiv.appendChild(card);
+            });
+        } catch (err) {
+            showMessage(`Failed to load customers: ${err.message}`, 'error');
+            customerListDiv.innerHTML = '<p>Could not load customers. Please check the Customer Service.</p>';
+        }
+    }
 
-  try {
-    const body = { name, price, stock_quantity: stock, description }; // <-- the fix
-    await jsonPost(`${API.products}/`, body);
-    showBanner('Product added', 'success');
-    clearProductForm();
-    loadProducts();
-  } catch (err) {
-    showBanner(`Failed to add product: ${err.message}`);
-  }
-}
+    customerForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const email = document.getElementById('customer-email').value;
+        const password = document.getElementById('customer-password').value;
+        const first_name = document.getElementById('customer-first-name').value;
+        const last_name = document.getElementById('customer-last-name').value;
+        const phone_number = document.getElementById('customer-phone').value;
+        const shipping_address = document.getElementById('customer-shipping-address').value;
 
-async function deleteProduct(id) {
-  try {
-    await jsonDelete(`${API.products}/${id}`);
-    showBanner('Product deleted', 'success');
-    loadProducts();
-  } catch (err) {
-    showBanner(`Failed to delete product: ${err.message}`);
-  }
-}
+        const body = { email, password, first_name, last_name, phone_number, shipping_address };
+        try {
+            const res = await fetch(`/customers/`, {
+                method: 'POST', headers: {'Content-Type':'application/json'},
+                body: JSON.stringify(body)
+            });
+            if (!res.ok) {
+                let e; try { e = await res.json(); } catch {}
+                throw new Error((e && e.detail && JSON.stringify(e.detail)) || `HTTP ${res.status}`);
+            }
+            const added = await res.json();
+            showMessage(`Customer "${added.email}" added! ID: ${added.customer_id}`, 'success');
+            customerForm.reset();
+            fetchCustomers();
+        } catch (err) {
+            showMessage(`Error adding customer: ${err.message}`, 'error');
+        }
+    });
 
-function clearProductForm() {
-  ['prodName','prodPrice','prodStock','prodDescription']
-    .forEach(id => { const el = $(`#${id}`); if (el) el.value=''; });
-}
+    customerListDiv.addEventListener('click', async (e) => {
+        if (!e.target.classList.contains('delete-customer-btn')) return;
+        const id = e.target.dataset.id;
+        if (!confirm(`Delete customer ${id}?`)) return;
+        try {
+            const res = await fetch(`/customers/${id}`, { method: 'DELETE' });
+            if (res.status === 204) {
+                showMessage(`Customer ${id} deleted.`, 'success');
+                fetchCustomers();
+            } else {
+                let dj; try { dj = await res.json(); } catch {}
+                throw new Error((dj && dj.detail && JSON.stringify(dj.detail)) || `HTTP ${res.status}`);
+            }
+        } catch (err) {
+            showMessage(`Error deleting customer: ${err.message}`, 'error');
+        }
+    });
 
-/* ---------- Cart + Orders (simple version) ---------- */
-const cart = []; // [{product_id, name, price, qty}]
+    // ---------- Orders ----------
+    placeOrderForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        if (!cart.length) { showMessage('Your cart is empty. Add products first.', 'info'); return; }
 
-function addToCart(productId) {
-  const existing = cart.find(c => c.product_id === productId);
-  if (existing) existing.qty += 1;
-  else cart.push({ product_id: productId, qty: 1 });
-  renderCart();
-}
+        const user_id = parseInt(document.getElementById('order-user-id').value, 10);
+        const shipping_address = document.getElementById('shipping-address').value;
+        const items = cart.map(i => ({
+            product_id: parseInt(i.product_id, 10),
+            quantity: i.quantity,
+            price_at_purchase: i.price
+        }));
+        const body = { user_id, shipping_address, items };
 
-function renderCart() {
-  const ctn = $('#cartItems');
-  const totalEl = $('#cartTotal');
-  if (!ctn || !totalEl) return;
+        try {
+            showMessage('Placing order... (status will update asynchronously)', 'info');
+            const res = await fetch(`/orders/`, {
+                method: 'POST', headers: {'Content-Type':'application/json'},
+                body: JSON.stringify(body)
+            });
+            if (!res.ok) {
+                let e; try { e = await res.json(); } catch {}
+                throw new Error((e && e.detail && JSON.stringify(e.detail)) || `HTTP ${res.status}`);
+            }
+            const placed = await res.json();
+            showMessage(`Order ${placed.order_id} created with status: ${placed.status}`, 'success');
+            cart = []; updateCartDisplay(); placeOrderForm.reset();
+            fetchOrders();
+        } catch (err) {
+            showMessage(`Error placing order: ${err.message}`, 'error');
+        }
+    });
 
-  if (!cart.length) {
-    ctn.innerHTML = '<div>Your cart is empty.</div>';
-    totalEl.textContent = '$0.00';
-    return;
-  }
-  const items = cart.map(i => `<div>Product ${i.product_id} (x${i.qty})</div>`).join('');
-  ctn.innerHTML = items;
-  // if you want real totals, you’d calculate from products list
-  totalEl.textContent = '$0.00';
-}
+    async function fetchOrders() {
+        orderListDiv.innerHTML = '<p>Loading orders...</p>';
+        try {
+            const res = await fetch(`/orders/`);
+            if (!res.ok) {
+                let e; try { e = await res.json(); } catch {}
+                throw new Error((e && e.detail) || `HTTP ${res.status}`);
+            }
+            const orders = await res.json();
+            orderListDiv.innerHTML = '';
+            if (!orders.length) { orderListDiv.innerHTML = '<p>No orders available yet.</p>'; return; }
 
-async function placeOrder() {
-  const userId = Number($('#orderUserId').value);
-  const shipping = $('#orderAddress').value.trim();
+            orders.forEach(o => {
+                const card = document.createElement('div');
+                card.className = 'order-card';
+                card.innerHTML = `
+                    <h3>Order ID: ${o.order_id}</h3>
+                    <p>User ID: ${o.user_id}</p>
+                    <p>Order Date: ${new Date(o.order_date).toLocaleString()}</p>
+                    <p>Status: <span id="order-status-${o.order_id}">${o.status}</span></p>
+                    <p>Total Amount: ${formatCurrency(o.total_amount)}</p>
+                    <p>Shipping Address: ${o.shipping_address || 'N/A'}</p>
+                    <p><small>Created: ${new Date(o.created_at).toLocaleString()}</small></p>
+                    <p><small>Last Updated: ${new Date(o.updated_at).toLocaleString()}</small></p>
+                    <h4>Items:</h4>
+                    <ul class="order-items">
+                        ${o.items.map(it => `
+                            <li>
+                              <span>Product ID: ${it.product_id}</span> - Qty: ${it.quantity}
+                              @ ${formatCurrency(it.price_at_purchase)} (Total: ${formatCurrency(it.item_total)})
+                            </li>`).join('')}
+                    </ul>
+                    <div class="status-selector">
+                        <select id="status-select-${o.order_id}" data-order-id="${o.order_id}">
+                            <option value="pending"   ${o.status === 'pending' ? 'selected' : ''}>Pending</option>
+                            <option value="processing"${o.status === 'processing' ? 'selected' : ''}>Processing</option>
+                            <option value="shipped"   ${o.status === 'shipped' ? 'selected' : ''}>Shipped</option>
+                            <option value="confirmed" ${o.status === 'confirmed' ? 'selected' : ''}>Confirmed</option>
+                            <option value="failed"    ${o.status === 'failed' ? 'selected' : ''}>Failed</option>
+                            <option value="cancelled" ${o.status === 'cancelled' ? 'selected' : ''}>Cancelled</option>
+                            <option value="completed" ${o.status === 'completed' ? 'selected' : ''}>Completed</option>
+                        </select>
+                        <button class="status-update-btn" data-id="${o.order_id}">Update Status</button>
+                    </div>
+                    <div class="card-actions">
+                        <button class="delete-btn" data-id="${o.order_id}">Delete Order</button>
+                    </div>`;
+                orderListDiv.appendChild(card);
+            });
+        } catch (err) {
+            showMessage(`Failed to load orders: ${err.message}`, 'error');
+            orderListDiv.innerHTML = '<p>Could not load orders. Please check the Order Service.</p>';
+        }
+    }
 
-  if (!userId || !shipping || cart.length === 0) {
-    showBanner('Please add items to cart and fill Customer ID & Address.');
-    return;
-  }
+    orderListDiv.addEventListener('click', async (e) => {
+        if (e.target.classList.contains('status-update-btn')) {
+            const id = e.target.dataset.id;
+            const sel = document.getElementById(`status-select-${id}`);
+            const status = sel.value;
+            try {
+                const res = await fetch(`/orders/${id}/status`, {
+                    method: 'PATCH',
+                    headers: {'Content-Type':'application/json'},
+                    body: JSON.stringify({ status })
+                });
+                if (!res.ok) {
+                    let dj; try { dj = await res.json(); } catch {}
+                    throw new Error((dj && dj.detail && JSON.stringify(dj.detail)) || `HTTP ${res.status}`);
+                }
+                const upd = await res.json();
+                document.getElementById(`order-status-${id}`).textContent = upd.status;
+                showMessage(`Order ${id} status updated to "${upd.status}"!`, 'success');
+                fetchOrders();
+            } catch (err) {
+                showMessage(`Error updating order status: ${err.message}`, 'error');
+            }
+        }
 
-  try {
-    const items = cart.map(i => ({ product_id: i.product_id, quantity: i.qty }));
-    const body = { customer_id: userId, shipping_address: shipping, items };
-    await jsonPost(`${API.orders}/`, body);
-    cart.length = 0;
-    renderCart();
-    showBanner('Order placed', 'success');
-    loadOrders();
-  } catch (err) {
-    showBanner(`Failed to place order: ${err.message}`);
-  }
-}
+        if (e.target.classList.contains('delete-btn')) {
+            const id = e.target.dataset.id;
+            if (!confirm(`Delete order ${id}? This removes its items too.`)) return;
+            try {
+                const res = await fetch(`/orders/${id}`, { method: 'DELETE' });
+                if (res.status === 204) {
+                    showMessage(`Order ${id} deleted.`, 'success');
+                    fetchOrders();
+                } else {
+                    let dj; try { dj = await res.json(); } catch {}
+                    throw new Error((dj && dj.detail && JSON.stringify(dj.detail)) || `HTTP ${res.status}`);
+                }
+            } catch (err) {
+                showMessage(`Error deleting order: ${err.message}`, 'error');
+            }
+        }
+    });
 
-async function loadOrders() {
-  const box = $('#ordersList');
-  if (box) box.innerHTML = '<em>Loading orders...</em>';
-  try {
-    const orders = await jsonFetch(`${API.orders}/`);
-    if (!box) return;
-    box.innerHTML = orders.length
-      ? orders.map(renderOrderCard).join('')
-      : '<div>No orders yet.</div>';
-  } catch (err) {
-    if (box) box.innerHTML = '<div class="text-danger">Could not load orders.</div>';
-    showBanner(`Failed to load orders: ${err.message}`);
-  }
-}
-
-function renderOrderCard(o) {
-  const items = (o.items ?? []).map(it =>
-    `<div class="small">Product ID: ${it.product_id} &times; ${it.quantity}</div>`
-  ).join('');
-  return `
-    <div class="card mb-2">
-      <div class="card-body">
-        <div class="fw-bold">Order ID: ${o.id}</div>
-        <div class="small text-muted">Customer: ${o.customer_id}</div>
-        <div class="small">Status: ${o.status}</div>
-        <div class="small">Address: ${o.shipping_address ?? ''}</div>
-        ${items}
-        <div class="d-flex gap-2 mt-2">
-          <button class="btn btn-sm btn-outline-secondary" onclick="updateOrderStatus(${o.id}, 'confirmed')">Confirm</button>
-          <button class="btn btn-sm btn-outline-danger" onclick="deleteOrder(${o.id})">Delete</button>
-        </div>
-      </div>
-    </div>
-  `;
-}
-
-async function updateOrderStatus(id, status) {
-  try {
-    await jsonPatch(`${API.orders}/${id}`, { status });
-    showBanner('Order updated', 'success');
-    loadOrders();
-  } catch (err) {
-    showBanner(`Failed to update order: ${err.message}`);
-  }
-}
-
-async function deleteOrder(id) {
-  try {
-    await jsonDelete(`${API.orders}/${id}`);
-    showBanner('Order deleted', 'success');
-    loadOrders();
-  } catch (err) {
-    showBanner(`Failed to delete order: ${err.message}`);
-  }
-}
-
-/* ---------- Wire up UI ---------- */
-function wireEvents() {
-  $('#btnAddCustomer')?.addEventListener('click', addCustomer);
-  $('#btnAddProduct')?.addEventListener('click', addProduct);
-  $('#btnPlaceOrder')?.addEventListener('click', placeOrder);
-}
-
-/* ---------- Bootstrap ---------- */
-document.addEventListener('DOMContentLoaded', async () => {
-  wireEvents();
-  await Promise.all([loadCustomers(), loadProducts(), loadOrders()]);
-  renderCart();
+    // initial loads + periodic refresh (same as your file’s behavior)
+    fetchProducts();
+    fetchCustomers();
+    fetchOrders();
+    setInterval(fetchOrders, 10000);
+    setInterval(fetchProducts, 15000);
 });
-
-/* expose for inline handlers */
-window.deleteCustomer = deleteCustomer;
-window.deleteProduct = deleteProduct;
-window.addToCart = addToCart;
-window.placeOrder = placeOrder;
-window.updateOrderStatus = updateOrderStatus;
-window.deleteOrder = deleteOrder;
