@@ -15,7 +15,7 @@ jobs:
     steps:
       # Checkout repo
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       # Login to Azure
       - name: Azure Login
@@ -25,41 +25,95 @@ jobs:
 
       # Setup kubectl
       - name: Set up kubectl
-        uses: azure/setup-kubectl@v3
+        uses: azure/setup-kubectl@v4
 
       # Get AKS credentials
       - name: Get AKS credentials
         run: |
           az aks get-credentials \
-            --resource-group ${{ secrets.AZURE_RESOURCE_GROUP }} \
-            --name ${{ secrets.AZURE_AKS_CLUSTER }} \
+            --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
+            --name "${{ secrets.AZURE_AKS_CLUSTER }}" \
             --overwrite-existing
 
       # Create staging namespace (if not exists)
       - name: Create staging namespace
         run: |
-          kubectl create namespace staging || echo "Namespace exists"
+          kubectl get ns staging >/dev/null 2>&1 || kubectl create namespace staging
 
       # Deploy to staging
       - name: Deploy manifests
         run: |
           kubectl apply -n staging -f k8s/
 
-      # Wait until pods are ready
-      - name: Wait for pods
+      # Wait for ALL deployments to finish rolling out
+      - name: Wait for deployments to be Available
         run: |
-          kubectl wait --for=condition=Ready pods --all -n staging --timeout=300s
+          set -e
+          # If there are no deployments, xargs won't run anything
+          kubectl -n staging get deploy -o name \
+          | xargs -r -I{} kubectl -n staging rollout status {} --timeout=300s
 
-      # Smoke test frontend
+      # Ensure the frontend Service has ready endpoints before curling it
+      - name: Wait for frontend service endpoints
+        run: |
+          set -e
+          # Wait up to 3 minutes for endpoints to exist and be ready
+          for i in $(seq 1 36); do
+            READY=$(kubectl -n staging get endpoints frontend -o jsonpath='{.subsets[0].addresses[0].ip}' 2>/dev/null || true)
+            if [ -n "$READY" ]; then
+              echo "Frontend endpoints are ready: $READY"
+              exit 0
+            fi
+            echo "Waiting for frontend endpoints... ($i/36)"
+            sleep 5
+          done
+          echo "Timed out waiting for frontend endpoints."
+          exit 1
+
+      # Smoke test (with retries) from a temporary curl pod
       - name: Run smoke test
         run: |
-          kubectl run curl --rm -i --tty --image=curlimages/curl -n staging -- \
-          curl http://frontend:80/ || exit 1
+          set -e
+          kubectl -n staging run curl --restart=Never --image=curlimages/curl:8.11.1 \
+            --command -- sh -c '
+              set -e
+              for i in $(seq 1 10); do
+                echo "Attempt $i: curl http://frontend:80/health (or /)"
+                if curl -fsS http://frontend:80/health || curl -fsS http://frontend:80/ ; then
+                  echo "Smoke test passed."
+                  exit 0
+                fi
+                sleep 5
+              done
+              echo "Smoke test failed after retries."
+              exit 1
+            '
+          # Clean up the temp pod (if it still exists)
+          kubectl -n staging delete pod curl --ignore-not-found=true
+
+      # If anything failed above, dump quick diagnostics BEFORE cleanup
+      - name: Diagnostics on failure
+        if: failure()
+        run: |
+          echo "=== Deployments ==="
+          kubectl -n staging get deploy -owide || true
+          echo "=== Pods ==="
+          kubectl -n staging get pods -owide || true
+          echo "=== Services ==="
+          kubectl -n staging get svc || true
+          echo "=== Endpoints (frontend) ==="
+          kubectl -n staging get endpoints frontend -oyaml || true
+          echo "=== Frontend logs (latest pod) ==="
+          POD=$(kubectl -n staging get pods -l app=frontend -o name | head -n1 || true)
+          [ -n "$POD" ] && kubectl -n staging logs "$POD" --tail=200 || echo "No frontend pod found"
 
       # Cleanup staging (always runs)
       - name: Destroy staging environment
         if: always()
         run: |
           echo "Cleaning up staging environment..."
-          kubectl delete -n staging -f k8s/ --ignore-not-found=true
+          kubectl delete -n staging -f k8s/ --ignore-not-found=true || true
+          # Delete any leftover test pod
+          kubectl -n staging delete pod curl --ignore-not-found=true || true
+          # Finally remove the namespace to catch stragglers (PVCs, Services, etc.)
           kubectl delete namespace staging --wait=true || true
