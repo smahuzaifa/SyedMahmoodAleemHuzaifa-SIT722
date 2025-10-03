@@ -15,6 +15,13 @@ from fastapi import Depends, FastAPI, HTTPException, Query, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, joinedload
+import os
+from fastapi import FastAPI
+
+# 👇 Add this line (fallback to localhost if env var not set)
+PRODUCT_SERVICE_URL = os.getenv("PRODUCT_SERVICE_URL", "http://product-service:8000")
+
+app = FastAPI()
 
 from .db import Base, SessionLocal, engine, get_db
 from .models import Order, OrderItem
