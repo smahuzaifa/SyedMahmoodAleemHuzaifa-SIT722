@@ -1,326 +1,326 @@
-/* ==============================
-   Config – tweak only if needed
-   ============================== */
-const ENDPOINTS = {
-  products: {
-    base: '/api/products',             // proxy to product-service
-    list: '/products/',                // GET
-    create: '/products/',              // POST  JSON {name, price, stock, description}
-    remove: (id) => `/products/${id}/`,// DELETE
-    upload: (id) => `/products/${id}/upload-image/` // POST multipart (file)
-  },
-  orders: {
-    base: '/api/orders',               // proxy to order-service
-    list: '/orders/',                  // GET
-    create: '/orders/',                // POST JSON {customer_id, items, shipping_address}
-    remove: (id) => `/orders/${id}/`,  // DELETE
-    status: (id) => `/orders/${id}/status/` // PUT JSON {status}
-  }
+/* ---------- tiny DOM helpers ---------- */
+const $ = (sel, root = document) => root.querySelector(sel);
+const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
+
+/* ---------- endpoints (nginx proxies these to the right services) ---------- */
+const API = {
+  customers: '/customers',
+  products:  '/products',
+  orders:    '/orders'
 };
 
-/* ==============================
-   Helpers
-   ============================== */
-const msgBox = document.getElementById('message-box');
-
-function showMessage(type, text) {
-  msgBox.className = `message-box ${type}`;
-  msgBox.textContent = text;
-  msgBox.style.display = 'block';
-  clearTimeout(showMessage._t);
-  showMessage._t = setTimeout(() => (msgBox.style.display = 'none'), 5000);
+/* ---------- UI helpers ---------- */
+const banner = $('#banner'); // optional top error/success alert area
+function showBanner(msg, type = 'error') {
+  if (!banner) return;
+  banner.textContent = msg;
+  banner.className = type === 'error'
+    ? 'alert alert-danger'
+    : 'alert alert-success';
+  banner.style.display = 'block';
+  setTimeout(() => (banner.style.display = 'none'), 6000);
 }
 
-async function http(method, url, body, isForm = false) {
-  const opts = { method, headers: {} };
-  if (body && !isForm) {
-    opts.headers['Content-Type'] = 'application/json';
-    opts.body = JSON.stringify(body);
-  } else if (body && isForm) {
-    opts.body = body; // FormData
-  }
+/* Generic fetch helpers with nicer errors */
+async function jsonFetch(url, opts = {}) {
   const res = await fetch(url, opts);
+  const text = await res.text();
+  let data = null;
+  try { data = text ? JSON.parse(text) : null; } catch { /* not JSON */ }
+
   if (!res.ok) {
-    const text = await res.text().catch(() => '');
-    throw new Error(`${res.status} ${res.statusText}: ${text}`);
+    const msg = data?.detail
+      ? (Array.isArray(data.detail) ? data.detail.map(d => d.msg || d).join(', ')
+                                    : (data.detail.message || data.detail))
+      : text || `${res.status} ${res.statusText}`;
+    throw new Error(`${res.status} ${res.statusText}: ${msg}`);
   }
-  const ct = res.headers.get('content-type') || '';
-  if (ct.includes('application/json')) return res.json();
-  return res.text();
+  return data;
 }
 
-/* ==============================
-   Product UI
-   ============================== */
-const productListEl = document.getElementById('product-list');
-const productForm = document.getElementById('product-form');
-
-async function loadProducts() {
-  try {
-    const products = await http('GET', ENDPOINTS.products.base + ENDPOINTS.products.list);
-    renderProducts(Array.isArray(products) ? products : []);
-  } catch (e) {
-    productListEl.innerHTML = `<p>Failed to load products: ${e.message}</p>`;
-  }
-}
-
-function renderProducts(products) {
-  if (!products.length) {
-    productListEl.innerHTML = `<p>No products yet.</p>`;
-    return;
-  }
-
-  productListEl.innerHTML = '';
-  products.forEach(p => {
-    const card = document.createElement('div');
-    card.className = 'product-card';
-
-    const title = document.createElement('h3');
-    title.textContent = `${p.name} (ID: ${p.id ?? p.product_id ?? ''})`;
-    card.appendChild(title);
-
-    const img = document.createElement('img');
-    img.alt = 'Product Image';
-    img.src = p.image_url || p.image || 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="600" height="200"><rect width="100%" height="100%" fill="%23e8f0f8"/><text x="50%" y="50%" dy=".3em" text-anchor="middle" fill="%23666" font-family="Segoe UI" font-size="24">No Image</text></svg>';
-    card.appendChild(img);
-
-    const price = document.createElement('p');
-    price.className = 'price';
-    price.textContent = `$${Number(p.price).toFixed(2)}`;
-    card.appendChild(price);
-
-    const stock = document.createElement('p');
-    stock.className = 'stock';
-    stock.textContent = `Stock: ${p.stock ?? p.stock_quantity ?? 0}`;
-    card.appendChild(stock);
-
-    const desc = document.createElement('p');
-    desc.textContent = (p.description || '').toString();
-    card.appendChild(desc);
-
-    // Upload group
-    const upWrap = document.createElement('div');
-    upWrap.className = 'upload-image-group';
-    const file = document.createElement('input');
-    file.type = 'file';
-    const upBtn = document.createElement('button');
-    upBtn.type = 'button';
-    upBtn.textContent = 'Upload Photo';
-    upBtn.onclick = async () => {
-      if (!file.files?.length) return showMessage('info', 'Choose an image first.');
-      const id = p.id ?? p.product_id;
-      const fd = new FormData();
-      fd.append('file', file.files[0]);
-      try {
-        await http('POST', ENDPOINTS.products.base + ENDPOINTS.products.upload(id), fd, true);
-        showMessage('success', 'Image uploaded.');
-        await loadProducts();
-      } catch (e) { showMessage('error', `Upload failed: ${e.message}`); }
-    };
-    upWrap.append(file, upBtn);
-    card.appendChild(upWrap);
-
-    // Actions
-    const actions = document.createElement('div');
-    actions.className = 'card-actions';
-    const addBtn = document.createElement('button');
-    addBtn.className = 'add-to-cart-btn';
-    addBtn.type = 'button';
-    addBtn.textContent = 'Add to Cart';
-    addBtn.onclick = () => addToCart({ id: p.id ?? p.product_id, name: p.name, price: Number(p.price) });
-
-    const delBtn = document.createElement('button');
-    delBtn.className = 'delete-btn';
-    delBtn.type = 'button';
-    delBtn.textContent = 'Delete';
-    delBtn.onclick = async () => {
-      const id = p.id ?? p.product_id;
-      if (!confirm('Delete this product?')) return;
-      try {
-        await http('DELETE', ENDPOINTS.products.base + ENDPOINTS.products.remove(id));
-        showMessage('success', 'Product deleted.');
-        await loadProducts();
-      } catch (e) { showMessage('error', `Delete failed: ${e.message}`); }
-    };
-
-    actions.append(addBtn, delBtn);
-    card.appendChild(actions);
-
-    productListEl.appendChild(card);
+function jsonPost(url, body) {
+  return jsonFetch(url, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(body)
   });
 }
 
-productForm.addEventListener('submit', async (ev) => {
-  ev.preventDefault();
-  const payload = {
-    name: document.getElementById('product-name').value.trim(),
-    price: Number(document.getElementById('product-price').value),
-    stock: Number(document.getElementById('product-stock').value),
-    description: document.getElementById('product-description').value.trim()
-  };
-  try {
-    await http('POST', ENDPOINTS.products.base + ENDPOINTS.products.create, payload);
-    showMessage('success', 'Product added.');
-    productForm.reset();
-    await loadProducts();
-  } catch (e) { showMessage('error', `Add failed: ${e.message}`); }
-});
-
-/* ==============================
-   Cart + Orders
-   ============================== */
-let cart = [];
-
-const cartEl = document.getElementById('cart-items');
-const totalEl = document.getElementById('cart-total');
-const orderForm = document.getElementById('place-order-form');
-
-function addToCart(p) {
-  const found = cart.find(i => i.id === p.id);
-  if (found) found.qty += 1;
-  else cart.push({ ...p, qty: 1 });
-  renderCart();
+function jsonDelete(url) {
+  return jsonFetch(url, { method: 'DELETE' });
 }
 
-function removeFromCart(id) {
-  cart = cart.filter(i => i.id !== id);
+function jsonPatch(url, body) {
+  return jsonFetch(url, {
+    method: 'PATCH',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(body)
+  });
+}
+
+/* ---------- Customers ---------- */
+async function loadCustomers() {
+  const list = $('#customersList');
+  if (list) list.innerHTML = '<em>Loading customers...</em>';
+  try {
+    const customers = await jsonFetch(`${API.customers}/`);
+    if (!list) return;
+    list.innerHTML = customers.length
+      ? customers.map(renderCustomerCard).join('')
+      : '<div>No customers yet.</div>';
+  } catch (err) {
+    if (list) list.innerHTML = '<div class="text-danger">Could not load customers.</div>';
+    showBanner(`Failed to load customers: ${err.message}`);
+  }
+}
+
+function renderCustomerCard(c) {
+  return `
+    <div class="card mb-2">
+      <div class="card-body">
+        <div class="fw-bold">${c.first_name ?? ''} ${c.last_name ?? ''} (ID: ${c.id})</div>
+        <div class="small text-muted">${c.email ?? ''}</div>
+        <div class="small">${c.phone_number ?? ''}</div>
+        <div class="small">${c.shipping_address ?? ''}</div>
+        <button class="btn btn-sm btn-outline-danger mt-2" onclick="deleteCustomer(${c.id})">Delete</button>
+      </div>
+    </div>
+  `;
+}
+
+async function addCustomer() {
+  try {
+    const body = {
+      email: $('#custEmail').value.trim(),
+      password: $('#custPassword').value,
+      first_name: $('#custFirst').value.trim(),
+      last_name: $('#custLast').value.trim(),
+      phone_number: $('#custPhone').value.trim(),
+      shipping_address: $('#custAddress').value.trim()
+    };
+    await jsonPost(`${API.customers}/`, body);
+    showBanner('Customer added', 'success');
+    clearCustomerForm();
+    loadCustomers();
+  } catch (err) {
+    showBanner(`Failed to add customer: ${err.message}`);
+  }
+}
+
+async function deleteCustomer(id) {
+  try {
+    await jsonDelete(`${API.customers}/${id}`);
+    showBanner('Customer deleted', 'success');
+    loadCustomers();
+  } catch (err) {
+    showBanner(`Failed to delete customer: ${err.message}`);
+  }
+}
+
+function clearCustomerForm() {
+  ['custEmail','custPassword','custFirst','custLast','custPhone','custAddress']
+    .forEach(id => { const el = $(`#${id}`); if (el) el.value=''; });
+}
+
+/* ---------- Products ---------- */
+async function loadProducts() {
+  const list = $('#productsList');
+  if (list) list.innerHTML = '<em>Loading products...</em>';
+  try {
+    const products = await jsonFetch(`${API.products}/`);
+    if (!list) return;
+    list.innerHTML = products.length
+      ? products.map(renderProductCard).join('')
+      : '<div>No products yet.</div>';
+  } catch (err) {
+    if (list) list.innerHTML = '<div class="text-danger">Could not load products.</div>';
+    showBanner(`Failed to load products: ${err.message}`);
+  }
+}
+
+function renderProductCard(p) {
+  const img = p.image_url ? `<img src="${p.image_url}" class="img-fluid mb-2" alt="${p.name}" />`
+                          : `<div class="no-image">No Image</div>`;
+  return `
+    <div class="card mb-3">
+      <div class="card-body">
+        <h6 class="card-title mb-1">${p.name} <span class="text-muted">(ID: ${p.id})</span></h6>
+        <div class="small text-muted mb-1">$${Number(p.price).toFixed(2)}</div>
+        <div class="small mb-1">${p.description ?? ''}</div>
+        <div class="small mb-2">Stock: ${p.stock_quantity}</div>
+        ${img}
+        <div class="d-flex gap-2 mt-2">
+          <button class="btn btn-sm btn-outline-primary" onclick="addToCart(${p.id})">Add to Cart</button>
+          <button class="btn btn-sm btn-outline-danger" onclick="deleteProduct(${p.id})">Delete</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+/* -------------- IMPORTANT CHANGE --------------
+   We only send `stock_quantity` (never `stock`).
+   This avoids 422 when backend expects stock_quantity.
+------------------------------------------------ */
+async function addProduct() {
+  const name  = $('#prodName').value.trim();
+  const price = Number($('#prodPrice').value);
+  const stock = Number($('#prodStock').value);
+  const description = $('#prodDescription').value.trim();
+
+  if (!name || Number.isNaN(price) || Number.isNaN(stock)) {
+    showBanner('Please fill Name, Price and Stock.');
+    return;
+  }
+
+  try {
+    const body = { name, price, stock_quantity: stock, description }; // <-- the fix
+    await jsonPost(`${API.products}/`, body);
+    showBanner('Product added', 'success');
+    clearProductForm();
+    loadProducts();
+  } catch (err) {
+    showBanner(`Failed to add product: ${err.message}`);
+  }
+}
+
+async function deleteProduct(id) {
+  try {
+    await jsonDelete(`${API.products}/${id}`);
+    showBanner('Product deleted', 'success');
+    loadProducts();
+  } catch (err) {
+    showBanner(`Failed to delete product: ${err.message}`);
+  }
+}
+
+function clearProductForm() {
+  ['prodName','prodPrice','prodStock','prodDescription']
+    .forEach(id => { const el = $(`#${id}`); if (el) el.value=''; });
+}
+
+/* ---------- Cart + Orders (simple version) ---------- */
+const cart = []; // [{product_id, name, price, qty}]
+
+function addToCart(productId) {
+  const existing = cart.find(c => c.product_id === productId);
+  if (existing) existing.qty += 1;
+  else cart.push({ product_id: productId, qty: 1 });
   renderCart();
 }
 
 function renderCart() {
+  const ctn = $('#cartItems');
+  const totalEl = $('#cartTotal');
+  if (!ctn || !totalEl) return;
+
   if (!cart.length) {
-    cartEl.innerHTML = '<li>Your cart is empty.</li>';
-    totalEl.textContent = 'Total: $0.00';
+    ctn.innerHTML = '<div>Your cart is empty.</div>';
+    totalEl.textContent = '$0.00';
     return;
   }
-  cartEl.innerHTML = '';
-  let total = 0;
-  cart.forEach(i => {
-    total += i.qty * i.price;
-    const li = document.createElement('li');
-    li.textContent = `${i.name} (x${i.qty})`;
-    const rm = document.createElement('button');
-    rm.textContent = 'Remove';
-    rm.onclick = () => removeFromCart(i.id);
-    li.appendChild(rm);
-    cartEl.appendChild(li);
-  });
-  totalEl.textContent = `Total: $${total.toFixed(2)}`;
+  const items = cart.map(i => `<div>Product ${i.product_id} (x${i.qty})</div>`).join('');
+  ctn.innerHTML = items;
+  // if you want real totals, you’d calculate from products list
+  totalEl.textContent = '$0.00';
 }
 
-orderForm.addEventListener('submit', async (ev) => {
-  ev.preventDefault();
-  if (!cart.length) return showMessage('info', 'Add items to cart first.');
-  const customerId = Number(document.getElementById('order-user-id').value);
-  const shipping = document.getElementById('shipping-address').value.trim();
+async function placeOrder() {
+  const userId = Number($('#orderUserId').value);
+  const shipping = $('#orderAddress').value.trim();
 
-  // Map cart -> order items shape expected by your service
-  const items = cart.map(i => ({ product_id: i.id, quantity: i.qty }));
+  if (!userId || !shipping || cart.length === 0) {
+    showBanner('Please add items to cart and fill Customer ID & Address.');
+    return;
+  }
 
-  const payload = { customer_id: customerId, items, shipping_address: shipping };
   try {
-    await http('POST', ENDPOINTS.orders.base + ENDPOINTS.orders.create, payload);
-    showMessage('success', 'Order placed.');
-    cart = [];
+    const items = cart.map(i => ({ product_id: i.product_id, quantity: i.qty }));
+    const body = { customer_id: userId, shipping_address: shipping, items };
+    await jsonPost(`${API.orders}/`, body);
+    cart.length = 0;
     renderCart();
-    orderForm.reset();
-    document.getElementById('order-user-id').value = 1;
-    await loadOrders();
-  } catch (e) { showMessage('error', `Place order failed: ${e.message}`); }
-});
-
-/* ==============================
-   Order UI
-   ============================== */
-const orderListEl = document.getElementById('order-list');
+    showBanner('Order placed', 'success');
+    loadOrders();
+  } catch (err) {
+    showBanner(`Failed to place order: ${err.message}`);
+  }
+}
 
 async function loadOrders() {
+  const box = $('#ordersList');
+  if (box) box.innerHTML = '<em>Loading orders...</em>';
   try {
-    const orders = await http('GET', ENDPOINTS.orders.base + ENDPOINTS.orders.list);
-    renderOrders(Array.isArray(orders) ? orders : []);
-  } catch (e) {
-    orderListEl.innerHTML = `<p>Failed to load orders: ${e.message}</p>`;
+    const orders = await jsonFetch(`${API.orders}/`);
+    if (!box) return;
+    box.innerHTML = orders.length
+      ? orders.map(renderOrderCard).join('')
+      : '<div>No orders yet.</div>';
+  } catch (err) {
+    if (box) box.innerHTML = '<div class="text-danger">Could not load orders.</div>';
+    showBanner(`Failed to load orders: ${err.message}`);
   }
 }
 
-function renderOrders(orders) {
-  if (!orders.length) {
-    orderListEl.innerHTML = '<p>No orders yet.</p>';
-    return;
-  }
-  orderListEl.innerHTML = '';
-  orders.forEach(o => {
-    const id = o.id ?? o.order_id;
-    const card = document.createElement('div');
-    card.className = 'order-card';
-
-    const h = document.createElement('h3');
-    h.textContent = `Order ID: ${id}`;
-    card.appendChild(h);
-
-    const meta = document.createElement('p');
-    meta.innerHTML = `User ID: <strong>${o.customer_id ?? o.user_id ?? ''}</strong><br>
-      Status: <strong>${o.status ?? 'unknown'}</strong><br>
-      Total Amount: <strong>$${Number(o.total_amount ?? o.total ?? 0).toFixed(2)}</strong><br>
-      Shipping Address: ${o.shipping_address ?? ''}`;
-    card.appendChild(meta);
-
-    const ul = document.createElement('ul');
-    ul.className = 'order-items';
-    (o.items || []).forEach(it => {
-      const li = document.createElement('li');
-      li.innerHTML = `Product <span>ID: ${it.product_id}</span> — Qty: ${it.quantity} @ $${Number(it.price ?? 0).toFixed(2)}`;
-      ul.appendChild(li);
-    });
-    card.appendChild(ul);
-
-    // status selector
-    const sWrap = document.createElement('div');
-    sWrap.className = 'status-selector';
-    const sel = document.createElement('select');
-    ['pending','confirmed','shipped','delivered','cancelled'].forEach(s=>{
-      const opt = document.createElement('option');
-      opt.value = s; opt.textContent = s.charAt(0).toUpperCase()+s.slice(1);
-      if ((o.status||'').toLowerCase() === s) opt.selected = true;
-      sel.appendChild(opt);
-    });
-    const upd = document.createElement('button');
-    upd.className='status-update-btn';
-    upd.textContent='Update Status';
-    upd.onclick = async () => {
-      try {
-        await http('PUT', ENDPOINTS.orders.base + ENDPOINTS.orders.status(id), { status: sel.value });
-        showMessage('success','Status updated.');
-        await loadOrders();
-      } catch (e) { showMessage('error', `Update failed: ${e.message}`); }
-    };
-    sWrap.append(sel, upd);
-    card.appendChild(sWrap);
-
-    // actions
-    const actions = document.createElement('div');
-    actions.className = 'card-actions';
-    const del = document.createElement('button');
-    del.className='delete-btn';
-    del.textContent='Delete Order';
-    del.onclick = async () => {
-      if (!confirm('Delete this order?')) return;
-      try {
-        await http('DELETE', ENDPOINTS.orders.base + ENDPOINTS.orders.remove(id));
-        showMessage('success', 'Order deleted.');
-        await loadOrders();
-      } catch (e) { showMessage('error', `Delete failed: ${e.message}`); }
-    };
-    actions.appendChild(del);
-    card.appendChild(actions);
-
-    orderListEl.appendChild(card);
-  });
+function renderOrderCard(o) {
+  const items = (o.items ?? []).map(it =>
+    `<div class="small">Product ID: ${it.product_id} &times; ${it.quantity}</div>`
+  ).join('');
+  return `
+    <div class="card mb-2">
+      <div class="card-body">
+        <div class="fw-bold">Order ID: ${o.id}</div>
+        <div class="small text-muted">Customer: ${o.customer_id}</div>
+        <div class="small">Status: ${o.status}</div>
+        <div class="small">Address: ${o.shipping_address ?? ''}</div>
+        ${items}
+        <div class="d-flex gap-2 mt-2">
+          <button class="btn btn-sm btn-outline-secondary" onclick="updateOrderStatus(${o.id}, 'confirmed')">Confirm</button>
+          <button class="btn btn-sm btn-outline-danger" onclick="deleteOrder(${o.id})">Delete</button>
+        </div>
+      </div>
+    </div>
+  `;
 }
 
-/* ==============================
-   Init
-   ============================== */
-(async function init(){
-  await Promise.all([loadProducts(), loadOrders()]);
-})();
+async function updateOrderStatus(id, status) {
+  try {
+    await jsonPatch(`${API.orders}/${id}`, { status });
+    showBanner('Order updated', 'success');
+    loadOrders();
+  } catch (err) {
+    showBanner(`Failed to update order: ${err.message}`);
+  }
+}
+
+async function deleteOrder(id) {
+  try {
+    await jsonDelete(`${API.orders}/${id}`);
+    showBanner('Order deleted', 'success');
+    loadOrders();
+  } catch (err) {
+    showBanner(`Failed to delete order: ${err.message}`);
+  }
+}
+
+/* ---------- Wire up UI ---------- */
+function wireEvents() {
+  $('#btnAddCustomer')?.addEventListener('click', addCustomer);
+  $('#btnAddProduct')?.addEventListener('click', addProduct);
+  $('#btnPlaceOrder')?.addEventListener('click', placeOrder);
+}
+
+/* ---------- Bootstrap ---------- */
+document.addEventListener('DOMContentLoaded', async () => {
+  wireEvents();
+  await Promise.all([loadCustomers(), loadProducts(), loadOrders()]);
+  renderCart();
+});
+
+/* expose for inline handlers */
+window.deleteCustomer = deleteCustomer;
+window.deleteProduct = deleteProduct;
+window.addToCart = addToCart;
+window.placeOrder = placeOrder;
+window.updateOrderStatus = updateOrderStatus;
+window.deleteOrder = deleteOrder;
