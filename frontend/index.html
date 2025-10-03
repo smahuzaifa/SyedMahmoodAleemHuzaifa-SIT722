@@ -1,129 +1,210 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8"/>
-  <title>E-commerce Application (Week 08)</title>
-  <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <meta charset="UTF-8" />
+  <title>E-Commerce Demo</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
-    :root{
-      --bg:#f5f7fb; --card:#ffffff; --muted:#6b7280; --text:#111827;
-      --primary:#0d6efd; --primary-600:#0b5ed7; --success:#16a34a; --danger:#dc2626; --ring:#e5e7eb;
+    :root {
+      --bg: #0b1220;
+      --panel: #121a2a;
+      --panel-2: #0f1729;
+      --text: #e6e6e6;
+      --muted: #a8b3cf;
+      --accent: #4f8cff;
+      --accent-2: #22c55e;
+      --danger: #ef4444;
+      --card: #101828;
+      --border: #1f2b44;
     }
-    *{box-sizing:border-box} html,body{height:100%}
-    body{margin:0;background:var(--bg);font-family:Inter,system-ui,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:var(--text)}
-    .container{max-width:980px;margin:36px auto;padding:0 18px}
-    .h1{font-size:30px;font-weight:700;text-align:center;margin:0 0 8px}
-    .sub{font-size:12px;text-align:center;color:var(--muted);margin-bottom:24px}
-    .card{background:var(--card);border:1px solid var(--ring);border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,.04);padding:16px;margin-bottom:18px}
-    .card h2{font-size:14px;margin:0 0 10px;text-align:center;font-weight:700}
-    .row{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px}
-    .row-2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
-    .row-1{display:grid;grid-template-columns:1fr;gap:10px}
-    input, textarea, select{width:100%;padding:9px 10px;border:1px solid var(--ring);border-radius:8px;background:#fff;font:inherit}
-    textarea{min-height:70px;resize:vertical}
-    .btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;
-         padding:10px 14px;border-radius:8px;border:1px solid transparent;cursor:pointer;font-weight:600}
-    .btn-primary{background:var(--primary);color:#fff}
-    .btn-primary:hover{background:var(--primary-600)}
-    .btn-success{background:var(--success);color:#fff}
-    .btn-danger{background:var(--danger);color:#fff}
-    .btn-outline{background:#fff;border-color:var(--ring)}
-    .section-title{margin:8px 0 10px;font-size:13px;color:var(--muted)}
-    .list{display:grid;gap:10px}
-    .pill{display:inline-flex;align-items:center;padding:2px 8px;border-radius:999px;font-size:12px;border:1px solid var(--ring);color:var(--muted)}
-    .product-card{border:1px solid var(--ring);border-radius:10px;padding:12px;background:#fff}
-    .product-img{width:100%;height:150px;border:1px dashed var(--ring);border-radius:8px;display:grid;place-items:center;color:var(--muted);font-size:14px;background:#fafafa;margin-bottom:10px}
-    .toolbar{display:flex;gap:8px;flex-wrap:wrap}
-    .split{display:grid;grid-template-columns:2fr 1fr;gap:12px}
-    .right{display:grid;gap:12px}
-    .danger-text{color:var(--danger);font-weight:600}
-    .muted{color:var(--muted)}
-    .hr{height:1px;background:var(--ring);margin:10px 0}
-    .error{background:#fee2e2;border:1px solid #fecaca;color:#991b1b;padding:10px;border-radius:8px;margin-bottom:10px}
-    .success{background:#dcfce7;border:1px solid #bbf7d0;color:#166534;padding:10px;border-radius:8px;margin-bottom:10px}
-    .total{font-weight:700}
-    .hidden{display:none}
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; background: var(--bg); color: var(--text); font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, "Helvetica Neue", Arial, "Noto Sans", "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
+    }
+    header {
+      position: sticky; top: 0; z-index: 20;
+      background: linear-gradient(180deg, #0c1424, #0b1220 70%);
+      border-bottom: 1px solid var(--border);
+    }
+    .container { max-width: 1100px; margin: 0 auto; padding: 18px 18px; }
+    h1 { margin: 0 0 4px; font-weight: 700; letter-spacing: .3px; }
+    .sub { color: var(--muted); margin: 0; font-size: 14px; }
+
+    .grid {
+      display: grid; grid-template-columns: 1.15fr .85fr; gap: 18px; margin-top: 18px;
+    }
+    .panel {
+      background: linear-gradient(180deg, var(--panel), var(--panel-2) 80%);
+      border: 1px solid var(--border);
+      border-radius: 14px; padding: 16px;
+    }
+    .panel h2 { margin: 0 0 10px; font-size: 18px; }
+    .stack { display: grid; gap: 12px; }
+    .row { display: grid; gap: 10px; grid-template-columns: repeat(2, 1fr); }
+    .row-3 { grid-template-columns: repeat(3, 1fr); }
+    label { font-size: 13px; color: var(--muted); }
+    input, textarea, select, button {
+      width: 100%; padding: 10px 12px; border-radius: 10px;
+      border: 1px solid var(--border); background: #0b1426; color: var(--text);
+    }
+    textarea { min-height: 86px; resize: vertical; }
+    button.primary { background: linear-gradient(180deg, #5b95ff, #4f8cff); border-color: #447be0; font-weight: 600; }
+    button.ghost { background: transparent; }
+    button.danger { background: linear-gradient(180deg, #ff6b6b, #ef4444); border-color: #e23a3a; color: #fff; }
+    .bar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+
+    .message-box { display:none; margin-bottom: 10px; padding: 10px 12px; border-radius: 10px; font-size: 14px; }
+    .message-box.info { background:#0f1b33; border:1px solid #1d3566; color:#b7ccff; }
+    .message-box.success { background:#0e1f18; border:1px solid #1d3c33; color:#b5f3d1; }
+    .message-box.error { background:#2a1417; border:1px solid #4a1e23; color:#ffbdbd; }
+
+    .cards { display:grid; gap:12px; }
+    .card {
+      background: var(--card); border:1px solid var(--border); border-radius:12px; padding:12px;
+      display:grid; gap:10px;
+    }
+    .card h3 { margin: 0; font-size: 16px; }
+    .price { color: var(--accent-2); font-weight: 600; }
+    .stock { color: #facc15; font-weight: 600; }
+    .card-actions { display:flex; gap:8px; flex-wrap: wrap; }
+    .upload-image-group { display:flex; gap:8px; align-items: center; flex-wrap: wrap; }
+
+    .cart ul { list-style:none; margin:0; padding:0; display:grid; gap:6px; }
+    .cart li { display:flex; justify-content:space-between; padding:8px 10px; background:#0b1426; border:1px dashed var(--border); border-radius:10px; }
+
+    .two { display:grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+    .muted { color: var(--muted); }
+    .mt { margin-top: 10px; }
+    .small { font-size: 12px; }
+    a { color: var(--accent); text-decoration: none; }
+    .sep { height:1px; background: var(--border); margin: 8px 0; }
   </style>
 </head>
 <body>
-  <div class="container">
-    <h1 class="h1">E-commerce Application (Week 08)</h1>
-    <div class="sub">Product Microservice, Order Microservice, Customer Microservice, RabbitMQ for Async Events, Persistent Storage & Azure Uploads.</div>
-
-    <!-- Customer Management -->
-    <div class="card" id="customer-card">
-      <h2>Customer Management</h2>
-      <div id="customer-msg" class="hidden"></div>
-      <div class="row-3 row">
-        <input id="custEmail" type="email" placeholder="Email">
-        <input id="custPassword" type="password" placeholder="Password">
-        <input id="custFirstName" type="text" placeholder="First Name">
-      </div>
-      <div class="row-2" style="margin-top:10px">
-        <input id="custLastName" type="text" placeholder="Last Name">
-        <input id="custPhone" type="text" placeholder="Phone Number">
-      </div>
-      <div class="row-1" style="margin-top:10px">
-        <textarea id="custAddress" placeholder="Shipping Address"></textarea>
-      </div>
-      <div style="margin-top:10px;display:flex;justify-content:center">
-        <button id="btnAddCustomer" class="btn btn-primary">Add Customer</button>
-      </div>
-
-      <div class="section-title">All Customers</div>
-      <div id="customersList" class="list"></div>
+  <header>
+    <div class="container">
+      <h1>E-Commerce Dashboard</h1>
+      <p class="sub">Products • Customers • Orders • Cart</p>
     </div>
+  </header>
 
-    <!-- Product + Cart / Orders two-column split -->
-    <div class="split">
-      <div class="left">
+  <main class="container">
+    <div id="message-box" class="message-box info"></div>
 
-        <!-- Product Management -->
-        <div class="card">
-          <h2>Product Management</h2>
-          <div id="product-msg" class="hidden"></div>
-          <div class="row-3 row">
-            <input id="prodName" type="text" placeholder="Name">
-            <input id="prodPrice" type="number" step="0.01" placeholder="Price">
-            <input id="prodStock" type="number" placeholder="Stock Quantity">
-          </div>
-          <div class="row-1" style="margin-top:10px">
-            <textarea id="prodDescription" placeholder="Description"></textarea>
-          </div>
-          <div style="margin-top:10px;display:flex;justify-content:center">
-            <button id="btnAddProduct" class="btn btn-primary">Add Product</button>
+    <div class="grid">
+      <!-- LEFT: Data & lists -->
+      <section class="panel">
+        <h2>Products</h2>
+        <div id="product-list" class="cards"></div>
+        <div class="sep"></div>
+        <h2 class="mt">Customers</h2>
+        <div id="customer-list" class="cards"></div>
+        <div class="sep"></div>
+        <h2 class="mt">Orders</h2>
+        <div id="order-list" class="cards"></div>
+      </section>
+
+      <!-- RIGHT: Forms & Cart -->
+      <section class="panel">
+        <div class="stack">
+          <div class="panel" style="background:transparent;border:none;padding:0">
+            <h2>Add Product</h2>
+            <form id="product-form" class="stack">
+              <div class="row">
+                <div>
+                  <label>Name</label>
+                  <input id="product-name" placeholder="e.g. Laptop" required />
+                </div>
+                <div>
+                  <label>Price</label>
+                  <input id="product-price" type="number" step="0.01" placeholder="e.g. 999.99" required />
+                </div>
+              </div>
+              <div class="row">
+                <div>
+                  <label>Stock</label>
+                  <input id="product-stock" type="number" placeholder="e.g. 5" required />
+                </div>
+                <div>
+                  <label>Description</label>
+                  <input id="product-description" placeholder="Short description" />
+                </div>
+              </div>
+              <div class="bar">
+                <button type="submit" class="primary">Add Product</button>
+                <button type="reset" class="ghost">Reset</button>
+              </div>
+            </form>
           </div>
 
-          <div class="section-title">Available Products</div>
-          <div id="productsList" class="list"></div>
+          <div class="panel" style="background:transparent;border:none;padding:0">
+            <h2>Add Customer</h2>
+            <form id="customer-form" class="stack">
+              <div class="row">
+                <div>
+                  <label>Email</label>
+                  <input id="customer-email" type="email" placeholder="email@example.com" required />
+                </div>
+                <div>
+                  <label>Password</label>
+                  <input id="customer-password" type="password" placeholder="password" required />
+                </div>
+              </div>
+              <div class="row">
+                <div>
+                  <label>First Name</label>
+                  <input id="customer-first-name" placeholder="Jane" required />
+                </div>
+                <div>
+                  <label>Last Name</label>
+                  <input id="customer-last-name" placeholder="Doe" required />
+                </div>
+              </div>
+              <div class="row">
+                <div>
+                  <label>Phone</label>
+                  <input id="customer-phone" placeholder="+61 4xx xxx xxx" />
+                </div>
+                <div>
+                  <label>Shipping Address</label>
+                  <input id="customer-shipping-address" placeholder="123 Main St" />
+                </div>
+              </div>
+              <div class="bar">
+                <button type="submit" class="primary">Add Customer</button>
+                <button type="reset" class="ghost">Reset</button>
+              </div>
+            </form>
+          </div>
+
+          <div class="panel cart" style="background:transparent;border:none;padding:0">
+            <h2>Cart</h2>
+            <ul id="cart-items"></ul>
+            <p id="cart-total" class="muted">Total: $0.00</p>
+            <div class="sep"></div>
+            <h2>Place Order</h2>
+            <form id="place-order-form" class="stack">
+              <div class="two">
+                <div>
+                  <label>User ID</label>
+                  <input id="order-user-id" type="number" placeholder="Customer ID" required />
+                </div>
+                <div>
+                  <label>Shipping Address</label>
+                  <input id="shipping-address" placeholder="Where should we deliver?" required />
+                </div>
+              </div>
+              <div class="bar">
+                <button type="submit" class="primary">Place Order</button>
+                <button type="reset" class="ghost">Reset</button>
+              </div>
+              <p class="small muted">Order status updates asynchronously after stock deduction via RabbitMQ.</p>
+            </form>
+          </div>
         </div>
-      </div>
-
-      <div class="right">
-        <!-- Cart + Place Order -->
-        <div class="card" id="cart-card">
-          <h2>Shopping Cart & Order Creation</h2>
-          <div id="cartList" class="list muted">Your cart is empty.</div>
-          <div style="text-align:right;margin:6px 0">Total: <span id="cartTotal" class="total">$0.00</span></div>
-          <div class="row-1">
-            <input id="orderCustomerId" type="number" placeholder="Customer ID">
-            <input id="orderAddress" type="text" placeholder="E.g., 123 Main St, Anytown">
-          </div>
-          <div style="margin-top:10px;display:flex;justify-content:center">
-            <button id="btnPlaceOrder" class="btn btn-success">Place Order</button>
-          </div>
-        </div>
-
-        <!-- Order Management -->
-        <div class="card">
-          <h2>Order Management</h2>
-          <div id="ordersList" class="list"></div>
-        </div>
-      </div>
+      </section>
     </div>
-  </div>
+  </main>
 
   <script src="./main.js"></script>
 </body>
