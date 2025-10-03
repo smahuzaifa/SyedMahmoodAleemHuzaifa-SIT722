@@ -55,4 +55,11 @@ jobs:
         run: |
           kubectl run curl --rm -i --tty --image=curlimages/curl -n staging -- \
           curl http://frontend:80/ || exit 1
-          
+
+      # Cleanup staging (always runs)
+      - name: Destroy staging environment
+        if: always()
+        run: |
+          echo "Cleaning up staging environment..."
+          kubectl delete -n staging -f k8s/ --ignore-not-found=true
+          kubectl delete namespace staging --wait=true || true
