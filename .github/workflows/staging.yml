@@ -1,4 +1,4 @@
-name: CD Pipeline - Deploy to Staging (Fast + Tiny Test)
+name: CD Pipeline - Deploy to Staging 
 
 on:
   push:
@@ -46,11 +46,93 @@ jobs:
           kubectl apply -n staging -f k8s/
 
       # Short rollout wait to keep things snappy
-      - name: Wait for deployments to be Available (short)
+      - name: Wait for deployments to be Available 
         run: |
           set -e
           kubectl -n staging get deploy -o name \
           | xargs -r -I{} kubectl -n staging rollout status {} --timeout=120s
 
-      # Tiny acceptance test (very fast):
-      # Assert that every Se
+      # Tiny acceptance test (very fast): each Service should have a ready endpoint
+      - name:  acceptance test (ready endpoints exist)
+        run: |
+          set -e
+          echo "Checking Services for ready endpoints in 'staging'..."
+          SVC_LIST=$(kubectl -n staging get svc -o name || true)
+          if [ -z "$SVC_LIST" ]; then
+            echo "No Services found in staging; tiny test skipped (treat as pass)."
+            exit 0
+          fi
+          FAIL=0
+          for SVC in $SVC_LIST; do
+            NAME=${SVC#service/}
+            OK=0
+            for i in $(seq 1 6); do
+              ADDR=$(kubectl -n staging get endpoints "$NAME" -o jsonpath='{.subsets[0].addresses[0].ip}' 2>/dev/null || true)
+              if [ -n "$ADDR" ]; then
+                echo "✅ $NAME has a ready endpoint: $ADDR"
+                OK=1; break
+              fi
+              sleep 5
+            done
+            if [ $OK -eq 0 ]; then
+              echo "❌ $NAME has no ready endpoints."
+              FAIL=1
+            fi
+          done
+          [ $FAIL -eq 0 ] && echo "Tiny acceptance test PASSED." || (echo "Tiny acceptance test FAILED." && exit 1)
+
+      # Quick diagnostics only if the tiny test failed
+      - name: Diagnostics on failure
+        if: failure()
+        run: |
+          echo "=== Deployments ==="
+          kubectl -n staging get deploy -owide || true
+          echo "=== Pods ==="
+          kubectl -n staging get pods -owide || true
+          echo "=== Services ==="
+          kubectl -n staging get svc -owide || true
+          echo "=== Endpoints ==="
+          kubectl -n staging get endpoints -oyaml || true
+
+      # VISIBLE, FAST CLEANUP
+      - name: Destroy staging environment (async + visible)
+        if: always()
+        run: |
+          set -e
+
+          echo "::group::Pre-destroy: resources in 'staging'"
+          kubectl -n staging get all -owide || true
+          kubectl -n staging get pvc || true
+          kubectl -n staging get svc -oyaml | head -n 80 || true
+          echo "::endgroup::"
+
+          echo "Scaling deployments to 0 to release endpoints quickly..."
+          kubectl -n staging get deploy -o name \
+          | xargs -r -I{} kubectl -n staging scale {} --replicas=0 || true
+
+          echo "Requesting namespace deletion (non-blocking)..."
+          kubectl delete namespace staging --wait=false || true
+
+          echo "::group::Watch termination (up to 60s)"
+          for i in $(seq 1 12); do
+            PHASE=$(kubectl get ns staging -o jsonpath='{.status.phase}' 2>/dev/null || true)
+            if [ -z "$PHASE" ]; then
+              echo "Namespace object already gone."; break
+            fi
+            echo "Tick $i: namespace phase='$PHASE'"
+            if [ "$PHASE" = "Terminating" ]; then
+              # Show what's left while K8s/Azure cleans up
+              kubectl -n staging get pods -owide || true
+              kubectl -n staging get svc || true
+            fi
+            sleep 5
+          done
+          echo "::endgroup::"
+
+          echo "Final check:"
+          if kubectl get ns staging >/dev/null 2>&1; then
+            kubectl get ns staging -o yaml | sed -n '1,80p' || true
+            echo "Cleanup requested, namespace may still be terminating in background."
+          else
+            echo "staging namespace not found (deleted)."
+          fi
