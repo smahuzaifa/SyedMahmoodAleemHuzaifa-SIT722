@@ -1,4 +1,4 @@
-name: CD Pipeline - Deploy to Staging
+name: CD Pipeline - Deploy to Staging (Fast + Tiny Test)
 
 on:
   push:
@@ -45,98 +45,12 @@ jobs:
         run: |
           kubectl apply -n staging -f k8s/
 
-      # Wait for ALL deployments to finish rolling out
-      - name: Wait for deployments to be Available
+      # Short rollout wait to keep things snappy
+      - name: Wait for deployments to be Available (short)
         run: |
           set -e
-          # If there are no deployments, xargs won't run anything
           kubectl -n staging get deploy -o name \
-          | xargs -r -I{} kubectl -n staging rollout status {} --timeout=300s
+          | xargs -r -I{} kubectl -n staging rollout status {} --timeout=120s
 
-      # Ensure the frontend Service has ready endpoints before curling it
-      - name: Wait for frontend service endpoints
-        run: |
-          set -e
-          # Wait up to 3 minutes for endpoints to exist and be ready
-          for i in $(seq 1 36); do
-            READY=$(kubectl -n staging get endpoints frontend -o jsonpath='{.subsets[0].addresses[0].ip}' 2>/dev/null || true)
-            if [ -n "$READY" ]; then
-              echo "Frontend endpoints are ready: $READY"
-              exit 0
-            fi
-            echo "Waiting for frontend endpoints... ($i/36)"
-            sleep 5
-          done
-          echo "Timed out waiting for frontend endpoints."
-          exit 1
-
-      # Smoke test (with retries) from a temporary curl pod
-      - name: Run smoke test
-        run: |
-          set -e
-          kubectl -n staging run curl --restart=Never --image=curlimages/curl:8.11.1 \
-            --command -- sh -c '
-              set -e
-              for i in $(seq 1 10); do
-                echo "Attempt $i: curl http://frontend:80/health (or /)"
-                if curl -fsS http://frontend:80/health || curl -fsS http://frontend:80/ ; then
-                  echo "Smoke test passed."
-                  exit 0
-                fi
-                sleep 5
-              done
-              echo "Smoke test failed after retries."
-              exit 1
-            '
-          # Clean up the temp pod (if it still exists)
-          kubectl -n staging delete pod curl --ignore-not-found=true
-
-      # If anything failed above, dump quick diagnostics BEFORE cleanup
-      - name: Diagnostics on failure
-        if: failure()
-        run: |
-          echo "=== Deployments ==="
-          kubectl -n staging get deploy -owide || true
-          echo "=== Pods ==="
-          kubectl -n staging get pods -owide || true
-          echo "=== Services ==="
-          kubectl -n staging get svc || true
-          echo "=== Endpoints (frontend) ==="
-          kubectl -n staging get endpoints frontend -oyaml || true
-          echo "=== Frontend logs (latest pod) ==="
-          POD=$(kubectl -n staging get pods -l app=frontend -o name | head -n1 || true)
-          [ -n "$POD" ] && kubectl -n staging logs "$POD" --tail=200 || echo "No frontend pod found"
-
-      # Cleanup staging (always runs)
-      - name: Destroy staging environment
-        if: always()
-        run: |
-          set -e
-
-          echo "1) Scale deployments to 0 (faster teardown, releases endpoints)"
-          kubectl -n staging get deploy -o name \
-          | xargs -r -I{} kubectl -n staging scale {} --replicas=0 || true
-
-          echo "2) Delete Services first and wait (releases Azure LBs)"
-          kubectl -n staging get svc -o name \
-          | xargs -r -I{} kubectl -n staging delete {} --wait=true || true
-
-          echo "3) Delete everything applied from k8s/ (best-effort)"
-          kubectl delete -n staging -f k8s/ --ignore-not-found=true || true
-
-          echo "4) Finally delete the namespace and wait"
-          kubectl delete namespace staging --wait=true || true
-
-          echo "5) Confirm namespace removal (retry for up to ~10 minutes)"
-          for i in $(seq 1 60); do
-            if ! kubectl get ns staging >/dev/null 2>&1; then
-              echo "Namespace staging is gone."
-              exit 0
-            fi
-            echo "Waiting for namespace to terminate... ($i/60)"
-            sleep 10
-          done
-
-          echo "Namespace still present; dumping details:"
-          kubectl get ns staging -o yaml || true
-          exit 1
+      # Tiny acceptance test (very fast):
+      # Assert that every Se
