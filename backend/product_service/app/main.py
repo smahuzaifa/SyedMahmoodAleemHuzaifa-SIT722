@@ -1,3 +1,5 @@
+# week05/backend/product_service/app/main.py
+
 import asyncio
 import json
 import logging
