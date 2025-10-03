@@ -20,6 +20,17 @@ jobs:
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
+      # Validate that required secrets exist
+      - name: Validate inputs
+        env:
+          AZ_RG: ${{ secrets.AZURE_RESOURCE_GROUP }}
+          AZ_AKS: ${{ secrets.AZURE_AKS_CLUSTER }}
+        run: |
+          if [ -z "$AZ_RG" ]; then echo "❌ Missing secret: AZURE_RESOURCE_GROUP"; exit 1; fi
+          if [ -z "$AZ_AKS" ]; then echo "❌ Missing secret: AZURE_AKS_CLUSTER"; exit 1; fi
+          echo "✅ Resource Group: $AZ_RG"
+          echo "✅ AKS Cluster: $AZ_AKS"
+
       # Setup kubectl
       - name: Set up kubectl
         uses: azure/setup-kubectl@v3
@@ -28,9 +39,15 @@ jobs:
       - name: Get AKS credentials
         run: |
           az aks get-credentials \
-            --resource-group ${{ secrets.AZURE_RESOURCE_GROUP }} \
-            --name ${{ secrets.AZURE_AKS_CLUSTER }} \
+            --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
+            --name "${{ secrets.AZURE_AKS_CLUSTER }}" \
             --overwrite-existing
+
+          # If you don’t want to use secrets, hardcode instead:
+          # az aks get-credentials \
+          #   --resource-group deakinuni \
+          #   --name smahweek10 \
+          #   --overwrite-existing
 
       # Deploy manifests
       - name: Deploy manifests
@@ -40,4 +57,5 @@ jobs:
       # Wait until pods are ready
       - name: Wait for pods
         run: |
+          # If your workloads are in 'prod' namespace, add: -n prod
           kubectl wait --for=condition=Ready pods --all --timeout=300s
