@@ -1,0 +1,21 @@
+{
+  "spec": {
+    "template": {
+      "spec": {
+        "containers": [
+          {
+            "name": "order-service",
+            "image": "smahweek10.azurecr.io/ecomm-order-service:prod-fix",
+            "env": [
+              { "name": "RABBITMQ_HOST", "value": "rabbitmq" },
+              { "name": "RABBITMQ_PORT", "value": "5672" }
+            ],
+            "ports": [
+              { "name": "http", "containerPort": 8001, "protocol": "TCP" }
+            ]
+          }
+        ]
+      }
+    }
+  }
+}

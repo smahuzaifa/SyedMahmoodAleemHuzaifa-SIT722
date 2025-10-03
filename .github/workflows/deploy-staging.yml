@@ -1,121 +1,44 @@
-name: Deploy to staging (testing branch)
+name: Deploy to Staging
 
 on:
-  push:
-    branches: [ "testing" ]
-
-permissions:
-  contents: read
-  id-token: write
-
-env:
-  NS: stg-${{ github.run_number }}
-  IMAGE_TAG: testing-${{ github.sha }}
+  workflow_run:
+    workflows: ["CI Testing"]   
+    types:
+      - completed
 
 jobs:
-  deploy-staging:
+  deploy:
+    # Only run if the CI workflow succeeded
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
-    environment:
-      name: staging
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-      - name: Azure login
-        uses: azure/login@v2
+      #  Add your build/deploy steps here
+      - name: Set up Docker
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Azure
+        uses: azure/login@v1
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      - name: Get AKS credentials
-        run: az aks get-credentials -g ${{ secrets.AKS_RESOURCE_GROUP }} -n ${{ secrets.AKS_CLUSTER_NAME }} --admin --overwrite-existing
+      - name: Log in to ACR
+        run: az acr login --name smahweek10
 
-      # Apply all manifests: infra first (DBs + RabbitMQ), then services
-      - name: Create namespace + apply base k8s (week08 + customer + rabbitmq)
+      - name: Build and push Docker image
         run: |
-          set -euo pipefail
-          kubectl create namespace $NS
-          kubectl -n $NS apply -f k8s/secrets.yaml
-          kubectl -n $NS apply -f k8s/configmaps.yaml
+          docker build -t smahweek10.azurecr.io/frontend:staging ./frontend
+          docker push smahweek10.azurecr.io/frontend:staging
 
-          # Infra first
-          kubectl -n $NS apply -f k8s/product-db.yaml
-          kubectl -n $NS apply -f k8s/order-db.yaml
-          kubectl -n $NS apply -f k8s/customer-db.yaml
-          kubectl -n $NS apply -f k8s/rabbitmq.yaml
-
-          # Then app services + frontend
-          kubectl -n $NS apply -f k8s/product-service.yaml
-          kubectl -n $NS apply -f k8s/order-service.yaml
-          kubectl -n $NS apply -f k8s/customer-service.yaml
-          kubectl -n $NS apply -f k8s/frontend.yaml
-
-      # Ensure infra is up before rolling the apps
-      - name: Wait for infra (dbs + rabbitmq)
-        run: |
-          set -euo pipefail
-          kubectl -n $NS rollout status deployment/product-db-deployment-w08e1 --timeout=180s
-          kubectl -n $NS rollout status deployment/order-db-deployment-w08e1   --timeout=180s
-          kubectl -n $NS rollout status deployment/customer-db-w08e1           --timeout=180s
-          kubectl -n $NS rollout status deployment/rabbitmq-w08e1              --timeout=180s
-
-      - name: Point deployments to freshly pushed images
-        env:
-          REG: ${{ secrets.ACR_LOGIN_SERVER }}
-        run: |
-          set -euo pipefail
-          kubectl -n $NS set image deployment/product-service-w08e1   product-service=$REG/ecomm-product-service:${IMAGE_TAG}
-          kubectl -n $NS set image deployment/order-service-w08e1     order-service=$REG/ecomm-order-service:${IMAGE_TAG}
-          kubectl -n $NS set image deployment/customer-service-w08e1  customer-service=$REG/ecomm-customer-service:${IMAGE_TAG}
-          kubectl -n $NS set image deployment/frontend                frontend=$REG/ecomm-frontend:${IMAGE_TAG}
-
-      - name: Wait for rollout (backend + customer)
-        run: |
-          set -euo pipefail
-          echo "Waiting for rollout of product-service-w08e1..."
-          kubectl -n $NS rollout status deployment/product-service-w08e1 --timeout=300s
-          echo "Waiting for rollout of order-service-w08e1..."
-          kubectl -n $NS rollout status deployment/order-service-w08e1 --timeout=300s
-          echo "Waiting for rollout of customer-service-w08e1..."
-          kubectl -n $NS rollout status deployment/customer-service-w08e1 --timeout=300s
-
-      # Frontend can be slow; don't fail the job on timeout but ensure at least 1 Ready replica
-      - name: Wait for rollout (frontend)
-        run: |
-          set +e
-          echo "Waiting for rollout of frontend..."
-          kubectl -n $NS rollout status deployment/frontend --timeout=300s
-          R=$?
-          set -e
-          if [ $R -ne 0 ]; then
-            echo "Frontend rollout timed out; continuing since a rolling update may still leave one pod available."
-          fi
-          READY=$(kubectl -n $NS get deploy frontend -o jsonpath='{.status.availableReplicas}')
-          if [ -z "$READY" ] || [ "$READY" = "0" ]; then
-            echo "No frontend replicas are available; showing diagnostics..."
-            kubectl -n $NS get deploy,rs,po,svc -o wide
-            kubectl -n $NS describe deploy frontend
-            exit 1
-          fi
-
-      - name: Simple acceptance checks inside cluster
-        run: |
-          set -euo pipefail
-          echo "=== Deployments & Pods ==="
-          kubectl -n $NS get deploy,po -o wide
-
-          echo "=== Describe deployments ==="
-          kubectl -n $NS describe deploy product-service-w08e1 || true
-          kubectl -n $NS describe deploy order-service-w08e1 || true
-          kubectl -n $NS describe deploy customer-service-w08e1 || true
-          kubectl -n $NS describe deploy frontend || true
-
-          echo "=== Recent logs ==="
-          kubectl -n $NS logs deploy/product-service-w08e1 --tail=100 || true
-          kubectl -n $NS logs deploy/order-service-w08e1 --tail=100 || true
-          kubectl -n $NS logs deploy/customer-service-w08e1 --tail=100 || true
-          kubectl -n $NS logs deploy/frontend --tail=100 || true
-
-      - name: Teardown staging (always)
-        if: always()
-        run: |
-          kubectl delete namespace $NS --wait=true
+      - name: Deploy to AKS (Staging)
+        uses: azure/aks-set-context@v3
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+          cluster-name: ${{ secrets.AKS_CLUSTER_NAME }}
+          resource-group: ${{ secrets.AKS_RESOURCE_GROUP }}
+      - run: |
+          kubectl -n staging set image deploy/frontend frontend=smahweek10.azurecr.io/frontend:staging
+          kubectl -n staging rollout status deploy/frontend
